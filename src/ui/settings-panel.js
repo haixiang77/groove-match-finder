@@ -6,7 +6,7 @@ import { defaultSettings, saveSettings } from '../settings.js';
 
 /** @typedef {import('../settings.js').Settings} Settings */
 
-const TEXT_FIELDS = /** @type {const} */ (['auddToken', 'acrHost', 'acrKey', 'acrSecret', 'lastfmKey', 'geminiKey', 'geminiModel', 'corsProxy', 'country']);
+const TEXT_FIELDS = /** @type {const} */ (['auddToken', 'acrHost', 'acrKey', 'acrSecret', 'lastfmKey', 'geminiKey', 'geminiModel', 'corsProxy', 'country', 'serverToken']);
 const NUM_FIELDS = /** @type {const} */ (['poolSize', 'topN', 'analysisWindowSec']);
 const BOOL_FIELDS = /** @type {const} */ (['useGeminiSuggestions', 'geminiAudioInExplain', 'persist']);
 const WEIGHT_KEYS = /** @type {const} */ (['rhythm', 'tempo', 'groove', 'timbre', 'key']);

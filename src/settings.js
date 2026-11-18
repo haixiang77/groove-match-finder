@@ -19,6 +19,7 @@ export const SettingsSchema = s.object({
   geminiKey: s.string().catch(''),
   geminiModel: s.string({ min: 1 }).catch('gemini-2.5-flash'),
   corsProxy: s.string().catch(''),
+  serverToken: s.string().catch(''),
   country: s.string({ min: 2, max: 2 }).catch('JP'),
   poolSize: s.number({ min: 8, max: 40, int: true }).catch(24),
   topN: s.number({ min: 3, max: 15, int: true }).catch(8),

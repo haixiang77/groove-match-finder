@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,3 +15,16 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: Ontology JSON is in sync with src/core/ontology.js
+        run: node scripts/export-ontology.mjs && git diff --exit-code refscope/data/genres.json
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+      - run: pip install -e ".[dev]"
+      - run: pytest -q

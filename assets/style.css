@@ -55,6 +55,7 @@ html {
 }
 body {
   margin: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   background: var(--bg);
   color: var(--text);
   font: 15px/1.6 var(--font);
@@ -136,6 +137,15 @@ code {
 .topbar-actions {
   display: flex;
   gap: 6px;
+}
+.mode-badge {
+  align-self: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  color: var(--ok);
 }
 .key-dot {
   width: 7px;

@@ -96,7 +96,7 @@ export function renderBandBalance(balance) {
   });
 }
 
-const SOURCE_LABEL = { manual: '手動入力', audd: 'AudD 指紋照合', acrcloud: 'ACRCloud 指紋照合', gemini: 'Gemini 聴取推論', filename: 'ファイル名から推定' };
+const SOURCE_LABEL = { manual: '手動入力', shazam: 'Shazam 指紋照合', audd: 'AudD 指紋照合', acrcloud: 'ACRCloud 指紋照合', gemini: 'Gemini 聴取推論', filename: 'ファイル名から推定' };
 
 /**
  * @param {import('../types.js').Identification | null} id

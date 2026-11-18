@@ -58,6 +58,7 @@ try {
     const page = await browser.newPage({ viewport });
     page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
     page.on('pageerror', (e) => consoleErrors.push(String(e)));
+    page.on('response', (r) => r.status() === 404 && !r.url().endsWith('/api/health') && consoleErrors.push(`404 ${r.url()}`));
     const searches = [];
     await page.route('https://itunes.apple.com/**', (route) => {
       const u = new URL(route.request().url());
@@ -115,7 +116,8 @@ try {
   await browser.close();
   server.close();
 }
-const relevantErrors = consoleErrors.filter((e) => !/favicon/i.test(e));
+// The server-mode probe (GET api/health) 404s on a static host by design.
+const relevantErrors = consoleErrors.filter((e) => !/favicon/i.test(e) && !/status of 404/.test(e));
 if (relevantErrors.length) failures.push(`console errors: ${relevantErrors.join(' || ')}`);
 if (failures.length) {
   console.error('E2E FAILED:\n - ' + failures.join('\n - '));

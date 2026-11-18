@@ -1,0 +1,8 @@
+.git
+node_modules
+tests
+tests_py
+worker
+.venv
+venv
+.env

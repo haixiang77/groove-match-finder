@@ -124,7 +124,7 @@ export const AudioFeaturesSchema = s.object({
  */
 
 /**
- * @typedef {'manual'|'audd'|'acrcloud'|'gemini'|'filename'} IdentificationSource
+ * @typedef {'manual'|'shazam'|'audd'|'acrcloud'|'gemini'|'filename'} IdentificationSource
  * @typedef {Object} Identification
  * @property {string} title
  * @property {string} artist

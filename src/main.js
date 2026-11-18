@@ -6,6 +6,7 @@ import { decodeToMono } from './audio/decode.js';
 import { findEnergyWindow } from './audio/analyzer.js';
 import { AnalysisPool } from './audio/worker-pool.js';
 import { runPipeline } from './core/pipeline.js';
+import { detectServer, runRemote } from './core/remote.js';
 import { loadSettings } from './settings.js';
 import { errorMessage, formatTime, isAbortError, textSimilarity } from './util.js';
 import { $, h, icon } from './ui/dom.js';
@@ -44,6 +45,8 @@ const state = {
 };
 
 const pool = new AnalysisPool();
+/** @type {import('./core/remote.js').ServerInfo} */
+let server = { available: false, providers: [], auth: false, version: '' };
 
 // ─────────────────────────────── elements ───────────────────────────────
 const els = {
@@ -101,6 +104,19 @@ bindSettingsForm(
 );
 updateKeyStatus();
 
+// Served by the Python backend? → server mode (keys live on the server).
+detectServer().then((info) => {
+  server = info;
+  if (!info.available) return;
+  $('mode-badge').hidden = false;
+  $('mode-badge').title = `Python サーバーで解析 (v${info.version})`;
+  document.querySelectorAll('[data-browser-only]').forEach((el) => el.setAttribute('hidden', ''));
+  document.querySelectorAll('[data-server-only]').forEach((el) => el.removeAttribute('hidden'));
+  $('server-info').textContent = `Python サーバーで解析します（Shazam 照合・librosa/SciPy 解析・プレビュー取得はサーバー側）。サーバーで有効なAPI: ${info.providers.join(', ') || 'なし（iTunes / MusicBrainz のみ）'}。APIキーはサーバーの環境変数で設定します。`;
+  $('server-token-field').hidden = !info.auth;
+  updateKeyStatus();
+});
+
 document.querySelectorAll('[data-open]').forEach((btn) =>
   btn.addEventListener('click', () => /** @type {HTMLDialogElement} */ ($(/** @type {HTMLElement} */ (btn).dataset.open ?? '')).showModal()),
 );
@@ -112,6 +128,11 @@ document.querySelectorAll('dialog').forEach((d) =>
 );
 
 function updateKeyStatus() {
+  if (server.available) {
+    els.keyStatus.hidden = server.providers.length === 0;
+    els.keyStatus.title = `サーバーで有効: ${server.providers.join(', ')}`;
+    return;
+  }
   const s = state.settings;
   const n = [s.auddToken || (s.acrKey && s.acrSecret), s.lastfmKey, s.geminiKey].filter(Boolean).length;
   els.keyStatus.hidden = n === 0;
@@ -222,7 +243,8 @@ async function startRun() {
   els.pipelineSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const { samples, sr } = state.audio;
   try {
-    await runPipeline({
+    const run = server.available ? runRemote : runPipeline;
+    await run({
       input: {
         samples,
         sr,
@@ -356,8 +378,9 @@ function renderFinalResults() {
       : [h('div', { class: 'card empty' }, 'しきい値を超える候補はありませんでした。設定で「合格しきい値」を下げるか、候補数を増やして再実行してください。')]),
   );
   els.resultsCount.textContent = `（合格 ${state.ranked.length} / 解析 ${state.scored.length}${state.failed.length ? ` / 取得失敗 ${state.failed.length}` : ''}）`;
+  const rankedKeys = new Set(state.ranked.map((r) => r.candidate.key));
   const rejected = [
-    ...state.scored.filter((r) => !state.ranked.includes(r)).sort((a, b) => b.score - a.score).map((r) => ({ name: `${r.candidate.artist} — ${r.candidate.title}`, detail: `${Math.round(r.score * 100)}%  BPM ${r.features.bpm}` })),
+    ...state.scored.filter((r) => !rankedKeys.has(r.candidate.key)).sort((a, b) => b.score - a.score).map((r) => ({ name: `${r.candidate.artist} — ${r.candidate.title}`, detail: `${Math.round(r.score * 100)}%  BPM ${r.features.bpm}` })),
     ...state.failed,
   ];
   els.rejectedWrap.hidden = rejected.length === 0;
@@ -375,7 +398,7 @@ els.exportJson.addEventListener('click', () => {
     app: 'RefScope',
     input: { file: state.file?.name, regionSec: state.region, identification: state.identification, features: state.features, genres: state.genres },
     results: state.ranked.map((r) => ({ ...r, candidate: { ...r.candidate, localFile: undefined } })),
-    rejected: state.scored.filter((r) => !state.ranked.includes(r)).map((r) => ({ artist: r.candidate.artist, title: r.candidate.title, score: r.score, breakdown: r.breakdown })),
+    rejected: state.scored.filter((r) => !state.ranked.some((x) => x.candidate.key === r.candidate.key)).map((r) => ({ artist: r.candidate.artist, title: r.candidate.title, score: r.score, breakdown: r.breakdown })),
     failed: state.failed,
     explanation: state.explanation,
     settings: safeSettings,

@@ -1,13 +1,22 @@
 # RefScope — Groove-Match Reference Finder
 
 **貼った楽曲と、ドラムパターン・グルーヴ・音色が限りなく近いリファレンス曲を見つける DTM コンパニオン。**
-GitHub Pages で動く完全ブラウザ版です（インストール・サーバー不要）。
+2つの動かし方があり、UI は共通です。
+
+| | ブラウザ版（GitHub Pages） | Python 版（`refscope serve` / CLI） |
+|---|---|---|
+| 起動 | URL を開くだけ | `pip install -e .` → `refscope serve` |
+| 楽曲同定 | AudD / ACRCloud（キー必要） | **shazamio（Shazam・キー不要）** → AudD → ACRCloud |
+| 解析エンジン | 純 JS 移植（Web Worker） | librosa + SciPy（仕様書どおり） |
+| CORS・iTunes レート制限 | ブラウザの制約あり（プロキシで回避） | 制約なし（サーバー側で取得） |
+| API キーの置き場所 | 各ブラウザの localStorage | サーバーの環境変数（`.env`） |
+| スマホ | そのまま使える | 同じ Wi-Fi / トンネル / クラウドで使える |
 
 「Pop」「EDM」のような大雑把なジャンルタグや LLM の当て推量ではなく、
 **音声指紋 × メタデータ × 波形フィルタ** のハイブリッド・パイプラインで「本当に似ている曲」だけを残します。
 
 ```
- 入力音声 ─┬─ ① 音声指紋で曲名を特定（AudD / ACRCloud → Gemini → ファイル名）
+ 入力音声 ─┬─ ① 音声指紋で曲名を特定（Shazam* / AudD / ACRCloud → Gemini → ファイル名）  *Python版
            └─ ① 物理解析（BPM・キー・16ステップ打点・スウィング・サイドチェイン…）
                      │
  ② 候補プール拡張：Last.fm 類似曲/類似アーティスト/タグ・MusicBrainz・ジャンル系統樹・iTunes
@@ -16,6 +25,52 @@ GitHub Pages で動く完全ブラウザ版です（インストール・サー�
                      │
  ④ Gemini が「なぜ似ているか」を数値に基づいて解説（任意）
 ```
+
+## Python 版（ブランチ `claude/refscope-python-l9z58s`）
+
+仕様書どおり Python 3.10+ / librosa / SciPy / shazamio / pylast / musicbrainzngs / Pydantic で実装したバックエンドです。
+同じ Web UI を配信するので、PC でもスマホでも同じ画面で使えます。
+
+```bash
+# 必要: Python 3.10+, ffmpeg（iTunes プレビューの m4a デコード用）
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env          # APIキー（すべて任意。Shazam はキー不要）
+
+refscope serve                # Web UI + API。スマホ用URLとQRコードを表示
+refscope analyze song.mp3 --json result.json        # CLI で解析
+refscope analyze demo.wav --artist "X" --title "Y" --refs ref1.wav ref2.mp3
+```
+
+| パス | 内容 |
+|---|---|
+| `refscope/audio/` | librosa 読み込み、SciPy Butterworth 帯域分離、テンポ／ビート、キー、16ステップグリッド、グルーヴ指標 |
+| `refscope/services/` | shazamio・AudD・ACRCloud・pylast・musicbrainzngs・iTunes・Gemini |
+| `refscope/core/` | オントロジー（`data/genres.json` を JS 版と共有）、類似度、候補プール、非同期パイプライン |
+| `refscope/server.py` | FastAPI。`POST /api/analyze` が進捗を NDJSON でストリーミング、`GET /api/health` |
+| `refscope/cli.py` | `refscope analyze` / `refscope serve` |
+
+Web UI は起動時に `api/health` を確認し、Python サーバーから配信されていれば自動で **サーバーモード**
+（右上に「サーバー」バッジ）になります。選択した解析区間だけを WAV でアップロードし、結果はサーバーから逐次表示されます。
+GitHub Pages から開いた場合は従来どおりブラウザ内で解析します。
+
+DSP は JS 版のアルゴリズムをそのまま移植しているため、同じ合成ループで BPM・打点・スウィング等が一致することをテストで確認しています。
+
+## スマホから使う方法
+
+| 方法 | 手順 | 向いている用途 | 注意 |
+|---|---|---|---|
+| **A. GitHub Pages 版をそのまま開く** | Safari / Chrome で Pages の URL → 共有 →「ホーム画面に追加」 | 手軽に使う。サーバー不要 | Shazam 不可（AudD 等のキーが必要）。CORS で取得できないプレビューはプロキシが必要 |
+| **B. 自宅 PC で `refscope serve`（同じ Wi-Fi）** | PC で `refscope serve` → 表示された QR コードをスマホで読む | DAW の横の PC で解析させ、スマホで操作・試聴 | `http://192.168.x.x:8000` は自宅 LAN 内のみ |
+| **C. B ＋ 外出先から（トンネル）** | [Tailscale](https://tailscale.com/)（推奨：自分の端末だけで閉じた VPN）または `cloudflared tunnel --url http://localhost:8000`（一時的な https URL） | 外出先から自宅 PC の解析エンジンを使う | 公開 URL にする場合は必ず `REFSCOPE_ACCESS_TOKEN` を設定 |
+| **D. クラウドに常駐** | `Dockerfile` を Render / Fly.io / Google Cloud Run / Hugging Face Spaces（Docker）にデプロイ。API キーは各サービスの Secret に設定 | PC を起動せずにいつでも使う | 無料枠はスリープ・CPU 制限あり。`REFSCOPE_ACCESS_TOKEN` 必須（第三者に API キーを使われないため） |
+
+**推奨**：まずは **A**（何もしなくてもスマホで動く）。Shazam 同定やプレビュー取得の安定性が欲しくなったら **B**、
+外出先でも使いたければ **B + Tailscale**、PC を常時起動したくなければ **D** です。
+
+- どちらの UI も PWA 対応（`manifest.webmanifest`・アイコン）なので、ホーム画面に追加するとアプリのように全画面で起動します。
+- iPhone では「ファイル」アプリ内の音源（ボイスメモ書き出し・DAW の書き出し・AirDrop で受け取った音源など）を選択できます。Apple Music のライブラリ曲は DRM のため選択できません。
+- GitHub Pages（https）から自宅サーバー（http）を呼ぶことはブラウザの混在コンテンツ制限でできないため、B〜D ではサーバーの URL を直接開きます。
 
 ## 使い方
 
@@ -88,6 +143,12 @@ npx wrangler secret put ALLOWED_ORIGINS   # 例: https://<user>.github.io
 ## 開発
 
 ```bash
+# Python
+pip install -e ".[dev]" && pytest -q
+python tests_py/e2e_server.py 8765 & node tests/e2e/server-mode.mjs 8765   # サーバーモードの E2E（iPhone 表示）
+node scripts/export-ontology.mjs   # src/core/ontology.js を変更したら Python 側 JSON を再生成
+
+# Web
 npm install          # 型チェック用の TypeScript のみ
 npm run typecheck    # JSDoc 型検査（strict）
 npm test             # DSP・類似度・オントロジー・API クライアントのユニットテスト
