@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RefScope — Groove-Match Reference Finder</title>
+    <meta name="description" content="貼った楽曲とドラムパターン・グルーヴ・音色が酷似したリファレンス曲を、音声指紋×メタデータ×波形解析で見つけるDTMツール。" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="assets/style.css" />
+    <script type="module" src="src/main.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="RefScope ホーム">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><use href="assets/icons.svg#logo" /></svg>
+        <span class="brand-name">RefScope</span>
+        <span class="brand-tag">Groove-Match Reference Finder</span>
+      </a>
+      <nav class="topbar-actions">
+        <button type="button" class="btn btn-ghost" data-open="help-dialog">使い方</button>
+        <button type="button" class="btn btn-ghost" data-open="settings-dialog" id="settings-button">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#gear" /></svg>設定<span class="key-dot" id="key-status" hidden></span>
+        </button>
+      </nav>
+    </header>
+
+    <main class="container">
+      <!-- 1. Drop zone -->
+      <section id="drop-section" class="hero">
+        <h1>その曲の<em>ノリ</em>と<em>鳴り</em>に、<br class="sp" />限りなく近いリファレンスを。</h1>
+        <p class="lead">
+          音声指紋で曲を特定 → Last.fm / iTunes / ジャンル系統樹で候補を収集 →
+          <strong>16ステップのドラム打点・グルーヴ・帯域バランスを波形レベルで照合</strong>し、本当に似ている曲だけを残します。
+        </p>
+        <label class="dropzone" id="dropzone" tabindex="0">
+          <input type="file" id="file-input" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.aiff" hidden />
+          <svg class="dz-icon" aria-hidden="true"><use href="assets/icons.svg#wave" /></svg>
+          <span class="dz-title">解析したい曲をドロップ</span>
+          <span class="dz-sub">または クリックして選択（MP3 / M4A / WAV / FLAC など）</span>
+        </label>
+        <ul class="hero-notes">
+          <li>音声のデコードと解析はすべてブラウザ内で実行されます。</li>
+          <li>外部に送信されるのは、設定したAPI（指紋照合・Gemini）向けの短い抜粋のみです。</li>
+          <li>APIキーなしでも iTunes・MusicBrainz・ジャンル系統樹ベースで動作します。</li>
+        </ul>
+      </section>
+
+      <!-- 2. Track / region -->
+      <section id="track-section" class="card" hidden>
+        <div class="card-head">
+          <div>
+            <h2 class="track-name" id="track-name">—</h2>
+            <p class="muted small" id="track-meta">—</p>
+          </div>
+          <button type="button" class="btn btn-ghost" id="change-file">別の曲を選ぶ</button>
+        </div>
+        <div class="waveform-wrap">
+          <canvas id="waveform" class="waveform" height="96" aria-label="波形と解析区間"></canvas>
+          <p class="muted small">波形をクリックすると解析区間（<span id="region-label">—</span>）を移動できます。初期値はエネルギー最大の区間（サビ／ドロップ）です。</p>
+        </div>
+        <div class="track-controls">
+          <button type="button" class="btn" id="play-region"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#play" /></svg><span>区間を再生</span></button>
+          <audio id="input-audio" preload="auto" hidden></audio>
+        </div>
+        <div class="form-grid">
+          <label class="field">
+            <span>アーティスト名（任意）</span>
+            <input type="text" id="manual-artist" autocomplete="off" placeholder="指紋照合できない時に使用" />
+          </label>
+          <label class="field">
+            <span>曲名（任意）</span>
+            <input type="text" id="manual-title" autocomplete="off" placeholder="空欄なら自動判定" />
+          </label>
+          <label class="field field-wide">
+            <span>手持ちのリファレンス候補も比較する（任意・複数可）</span>
+            <input type="file" id="local-refs" accept="audio/*" multiple />
+          </label>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn btn-primary btn-lg" id="run-button">解析してリファレンスを探す</button>
+          <button type="button" class="btn btn-ghost" id="cancel-button" hidden>キャンセル</button>
+        </div>
+      </section>
+
+      <!-- 3. Pipeline progress -->
+      <section id="pipeline-section" class="card" hidden>
+        <h2 class="section-title">パイプライン</h2>
+        <ol class="steps" id="steps">
+          <li data-step="identify"><span class="step-dot"></span><div><b>1. 楽曲同定 ＋ 波形解析</b><span class="step-detail">待機中</span></div></li>
+          <li data-step="expand"><span class="step-dot"></span><div><b>2. 候補プール拡張</b><span class="step-detail">待機中</span></div></li>
+          <li data-step="filter"><span class="step-dot"></span><div><b>3. 波形フィルタ＆再ランキング</b><span class="step-detail">待機中</span></div></li>
+          <li data-step="explain"><span class="step-dot"></span><div><b>4. AI解説</b><span class="step-detail">待機中</span></div></li>
+        </ol>
+        <details class="log" id="log-details">
+          <summary>ログ</summary>
+          <ul id="log"></ul>
+        </details>
+      </section>
+
+      <!-- 4. Input analysis -->
+      <section id="analysis-section" hidden>
+        <div class="grid-2">
+          <div class="card">
+            <h2 class="section-title">入力曲の物理解析</h2>
+            <div class="stats" id="stats"></div>
+            <h3 class="sub-title">16ステップ・リズムグリッド <span class="muted small">（1小節・帯域別オンセット強度）</span></h3>
+            <div id="input-heatmap"></div>
+            <h3 class="sub-title">帯域バランス</h3>
+            <div id="band-balance" class="band-balance"></div>
+          </div>
+          <div class="card">
+            <h2 class="section-title">同定結果とジャンル骨格</h2>
+            <div id="identity"></div>
+            <div id="genres"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. Results -->
+      <section id="results-section" hidden>
+        <div class="results-head">
+          <h2 class="section-title">波形照合済みリファレンス <span class="muted" id="results-count"></span></h2>
+          <div class="results-tools">
+            <button type="button" class="btn btn-ghost" id="export-json" disabled>JSONを書き出す</button>
+          </div>
+        </div>
+        <div id="results" class="results"></div>
+        <details class="card rejected" id="rejected-wrap" hidden>
+          <summary>しきい値未満・解析できなかった候補 <span id="rejected-count"></span></summary>
+          <div id="rejected"></div>
+        </details>
+      </section>
+
+      <!-- 6. Explanation -->
+      <section id="explain-section" class="card" hidden>
+        <h2 class="section-title">AI による技術解説 <span class="badge">Gemini</span></h2>
+        <div id="explain"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>RefScope — 音声指紋 × メタデータ × 波形フィルタのハイブリッド・リファレンス探索。プレビュー音源・アートワークは Apple の iTunes Search API によるものです。</p>
+    </footer>
+
+    <!-- Settings -->
+    <dialog id="settings-dialog" class="dialog">
+      <form method="dialog" id="settings-form">
+        <header class="dialog-head">
+          <h2>設定</h2>
+          <button type="button" class="btn btn-ghost btn-icon" data-close aria-label="閉じる">✕</button>
+        </header>
+        <div class="dialog-body">
+          <p class="notice">APIキーはこのブラウザにのみ保存され、各APIへ直接送信されます。リポジトリやサーバーには保存されません。</p>
+          <fieldset>
+            <legend>音声指紋照合（Step 1）</legend>
+            <label class="field"><span>AudD API Token <a href="https://dashboard.audd.io/" target="_blank" rel="noopener">取得</a></span><input name="auddToken" type="password" autocomplete="off" /></label>
+            <div class="form-grid">
+              <label class="field"><span>ACRCloud Host</span><input name="acrHost" placeholder="identify-ap-southeast-1.acrcloud.com" autocomplete="off" /></label>
+              <label class="field"><span>ACRCloud Access Key</span><input name="acrKey" type="password" autocomplete="off" /></label>
+              <label class="field"><span>ACRCloud Access Secret</span><input name="acrSecret" type="password" autocomplete="off" /></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>メタデータ／類似曲（Step 2）</legend>
+            <label class="field"><span>Last.fm API Key <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener">取得</a></span><input name="lastfmKey" type="password" autocomplete="off" /></label>
+            <label class="field"><span>iTunes ストアの国</span>
+              <select name="country">
+                <option value="JP">日本 (JP)</option><option value="US">アメリカ (US)</option><option value="GB">イギリス (GB)</option>
+                <option value="KR">韓国 (KR)</option><option value="DE">ドイツ (DE)</option><option value="FR">フランス (FR)</option>
+                <option value="CA">カナダ (CA)</option><option value="AU">オーストラリア (AU)</option><option value="BR">ブラジル (BR)</option>
+              </select>
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Gemini（同定フォールバック・Step 4 解説）</legend>
+            <div class="form-grid">
+              <label class="field"><span>Gemini API Key <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">取得</a></span><input name="geminiKey" type="password" autocomplete="off" /></label>
+              <label class="field"><span>モデル</span><input name="geminiModel" autocomplete="off" list="gemini-models" /></label>
+              <datalist id="gemini-models"><option value="gemini-2.5-flash"></option><option value="gemini-2.5-pro"></option><option value="gemini-2.5-flash-lite"></option></datalist>
+            </div>
+            <label class="check"><input type="checkbox" name="useGeminiSuggestions" /> Gemini の推薦曲も候補に加える（波形フィルタで検証）</label>
+            <label class="check"><input type="checkbox" name="geminiAudioInExplain" /> 解説時に入力曲の抜粋音声も Gemini に渡す</label>
+          </fieldset>
+          <fieldset>
+            <legend>フィルタ</legend>
+            <div class="form-grid">
+              <label class="field"><span>波形検証する候補数</span><input name="poolSize" type="number" min="8" max="40" step="1" /></label>
+              <label class="field"><span>表示する上位件数</span><input name="topN" type="number" min="3" max="15" step="1" /></label>
+              <label class="field"><span>合格しきい値（%）</span><input name="minScore" type="number" min="0" max="100" step="1" /></label>
+              <label class="field"><span>入力曲の解析区間（秒）</span><input name="analysisWindowSec" type="number" min="15" max="90" step="5" /></label>
+            </div>
+            <div class="weights" id="weights">
+              <label class="range"><span>リズムグリッド</span><input type="range" name="w.rhythm" min="0" max="1" step="0.05" /><output></output></label>
+              <label class="range"><span>テンポ</span><input type="range" name="w.tempo" min="0" max="1" step="0.05" /><output></output></label>
+              <label class="range"><span>グルーヴ</span><input type="range" name="w.groove" min="0" max="1" step="0.05" /><output></output></label>
+              <label class="range"><span>音色・帯域</span><input type="range" name="w.timbre" min="0" max="1" step="0.05" /><output></output></label>
+              <label class="range"><span>キー</span><input type="range" name="w.key" min="0" max="1" step="0.05" /><output></output></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>ネットワーク</legend>
+            <label class="field"><span>CORS プロキシ（任意） 例: <code>https://your-proxy.workers.dev/?url=</code></span><input name="corsProxy" autocomplete="off" placeholder="空欄 = 直接アクセス" /></label>
+            <label class="check"><input type="checkbox" name="persist" /> このブラウザに設定を保存する（オフ = タブを閉じると消去）</label>
+          </fieldset>
+        </div>
+        <footer class="dialog-foot">
+          <button type="button" class="btn btn-ghost" id="settings-reset">初期値に戻す</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-ghost" data-close>キャンセル</button>
+          <button type="submit" class="btn btn-primary" value="save">保存</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <!-- Help -->
+    <dialog id="help-dialog" class="dialog">
+      <header class="dialog-head">
+        <h2>使い方と仕組み</h2>
+        <button type="button" class="btn btn-ghost btn-icon" data-close aria-label="閉じる">✕</button>
+      </header>
+      <div class="dialog-body prose">
+        <ol>
+          <li><b>曲をドロップ</b>：ブラウザ内でデコードし、エネルギー最大の30秒（サビ／ドロップ）を自動選択します。</li>
+          <li><b>楽曲同定</b>：AudD / ACRCloud の音声指紋で曲名を特定。失敗時は Gemini の聴取推論 → ファイル名 の順にフォールバックします。曲名は手入力も可能です。</li>
+          <li><b>候補収集</b>：Last.fm の類似曲・類似アーティスト・タグ、MusicBrainz のジャンル、ジャンル系統樹（親・派生・兄弟・影響関係）から iTunes の30秒プレビューを集めます。</li>
+          <li><b>波形フィルタ</b>：全候補のプレビューに入力曲と同じ解析（キック30–140Hz／スネア160–1500Hz／ハイハット6kHz+ の Butterworth 帯域分離 → 16ステップ打点、BPM、キー、スウィング、サイドチェイン、808サステイン、帯域バランス）をかけ、類似度でランク付けします。</li>
+          <li><b>解説</b>：Gemini が数値に基づいて「なぜ似ているのか」を言語化します（キー設定時）。</li>
+        </ol>
+        <h3>APIキー</h3>
+        <p>すべて任意です。キーがなくても iTunes / MusicBrainz / 系統樹による探索と波形フィルタは動作します。精度を上げたい場合は Last.fm（無料）と AudD または ACRCloud を設定してください。</p>
+        <h3>CORS プロキシ</h3>
+        <p>ブラウザから一部のAPIやプレビュー音源にアクセスできない場合は、リポジトリの <code>worker/cors-proxy.js</code> を Cloudflare Workers にデプロイし、そのURLを設定してください。</p>
+      </div>
+    </dialog>
+
+    <noscript><p class="noscript">RefScope を使うには JavaScript を有効にしてください。</p></noscript>
+  </body>
+</html>
