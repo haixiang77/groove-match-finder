@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "goal": "RefScope の解析・候補処理の性能を、出力（解析結果・ランキング）を変えずに改善する",
+  "rules": [
+    "このファイルは人間が定義する完了条件。AI が変更してよいのは requirements[].passed のみ。",
+    "passed=true にできるのは `verify.py --req <ID>` 合格 かつ evaluator PASS の直後のみ。",
+    "要件を追加・変更したら人間がターミナルで `python .agent/verifiers/verify.py --relock` を実行する。"
+  ],
+  "requirements": [
+    {
+      "id": "REQ-000",
+      "title": "ハーネス基盤のセルフチェックが通る",
+      "acceptance_criteria": [
+        "CLAUDE.md / settings.json / .mcp.json / agents / skills / verifiers が揃っている",
+        "CLAUDE.md が100行以内",
+        "サブエージェントの権限制約が守られている"
+      ],
+      "verify": "python .agent/verifiers/verify.py --harness-only",
+      "depends_on": [],
+      "owner_paths": [".claude/", ".agent/", "CLAUDE.md"],
+      "passed": false
+    },
+    {
+      "id": "REQ-001",
+      "title": "ベンチマーク追加と IIR フィルタ(sosfiltfilt)の高速化",
+      "acceptance_criteria": [
+        "tests/bench.mjs が合成ループで analyzer の実行時間を出力する",
+        "filters.js の sosfiltfilt が出力不変（既存テスト合格）のまま、reverse 2回と余分なバッファ確保を排除している",
+        "npm test と npm run typecheck が成功"
+      ],
+      "verify": "npm run typecheck && npm test && node tests/bench.mjs",
+      "depends_on": ["REQ-000"],
+      "owner_paths": ["src/audio/filters.js", "src/audio/analyzer.js", "tests/"],
+      "passed": false
+    },
+    {
+      "id": "REQ-002",
+      "title": "STFT 高速化（hypot 排除・窓キャッシュ・実数FFT）",
+      "acceptance_criteria": [
+        "dsp.js の STFT が Math.hypot を使わず、hann 窓をサイズ別にキャッシュしている",
+        "実数入力の FFT を n/2 点複素FFTで計算し、旧実装との数値差が 1e-9 相対以内であるテストがある",
+        "npm test と npm run typecheck が成功"
+      ],
+      "verify": "npm run typecheck && npm test",
+      "depends_on": ["REQ-001"],
+      "owner_paths": ["src/audio/dsp.js", "src/audio/key.js", "src/audio/analyzer.js", "tests/"],
+      "passed": false
+    },
+    {
+      "id": "REQ-003",
+      "title": "パイプラインの並列化と特徴量キャッシュの重複排除",
+      "acceptance_criteria": [
+        "Last.fm の独立呼び出し・iTunes 解決が並列化され、候補の追加順序は従来と同じ",
+        "featureCache が Promise を保持し、同一 previewUrl の同時解析が1回になる（テストあり）",
+        "レート制限（http.js）を迂回しない",
+        "npm test と npm run typecheck が成功"
+      ],
+      "verify": "npm run typecheck && npm test",
+      "depends_on": ["REQ-002"],
+      "owner_paths": ["src/core/pipeline.js", "src/audio/worker-pool.js", "tests/"],
+      "passed": false
+    },
+    {
+      "id": "REQ-004",
+      "title": "デコード・minFilter・percentile の軽量化",
+      "acceptance_criteria": [
+        "decode.js のモノ化が合算後に1回だけスケールする",
+        "dsp.js の minFilter が O(n) の単調deque実装で、旧実装と同一出力のテストがある",
+        "npm test と npm run typecheck が成功"
+      ],
+      "verify": "npm run typecheck && npm test",
+      "depends_on": ["REQ-003"],
+      "owner_paths": ["src/audio/decode.js", "src/audio/dsp.js", "src/audio/analyzer.js", "tests/"],
+      "passed": false
+    },
+    {
+      "id": "REQ-005",
+      "title": "URL貼り付け入力（Issue #3 第1段階）",
+      "acceptance_criteria": [
+        "Apple Music / iTunes の曲リンクからトラックIDを解決し、iTunes Lookup のプレビューで読み込める",
+        "YouTube リンクは oEmbed のタイトル照合で曲を特定し、曖昧な場合は候補提示か明確な失敗表示になる",
+        "読み込んだ曲がファイル入力と同じ経路（波形・区間選択・解析・パイプライン）に乗り、特定できた曲名・アーティスト名が識別情報として渡る",
+        "不正URL・未対応サイト・通信失敗で日本語のエラーメッセージが出て、ファイル入力に影響しない",
+        "URLパースの単体テストがあり、npm test と npm run typecheck が成功"
+      ],
+      "verify": "npm run typecheck && npm test",
+      "depends_on": [],
+      "owner_paths": ["src/", "index.html", "assets/", "tests/"],
+      "passed": true
+    },
+    {
+      "id": "REQ-006",
+      "title": "実ミックスでのスネアタイミング検出の改善（Issue #1）",
+      "acceptance_criteria": [
+        "実プレビュー（Midnight Mission、解析区間8–28秒）でスネアレーンの正解グリッドとの一致（cosine）が現行0.43から明確に改善する",
+        "合成評価のグリッドF1が84.1%以上を維持する",
+        "npm test と npm run typecheck が成功"
+      ],
+      "verify": "npm run typecheck && npm test",
+      "depends_on": [],
+      "owner_paths": ["src/audio/", "tests/", "scripts/"],
+      "passed": true
+    },
+    {
+      "id": "REQ-007",
+      "title": "候補ごとのLast.fmタグによる系統判定レイヤー（Issue #2 残課題）",
+      "acceptance_criteria": [
+        "候補曲ごとに Last.fm のタグを取得し、tagsToGenres で系統に変換して系統係数に反映する",
+        "タグが取得できない候補では従来の音響骨格ベースの判定にフォールバックする",
+        "フリーBGM素材での検証で、系統の一致・不一致がランキングに反映されることを確認する",
+        "npm test と npm run typecheck が成功"
+      ],
+      "verify": "npm run typecheck && npm test",
+      "depends_on": [],
+      "owner_paths": ["src/", "tests/"],
+      "passed": true
+    }
+  ]
+}

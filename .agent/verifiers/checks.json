@@ -1,0 +1,4 @@
+{ "checks": [
+  { "name": "typecheck", "cmd": "npm run typecheck", "parser": "tsc", "timeout": 300 },
+  { "name": "test", "cmd": "npm test", "parser": "generic", "timeout": 600 }
+] }

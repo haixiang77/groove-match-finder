@@ -1,0 +1,14 @@
+{
+  "sha256": "dd49a7de09fbf6b2aebcaacf4ad7161da84000061f9ff2c67f66d609695176f2",
+  "harness": {
+    ".agent/verifiers/verify.py": "9b1813c0a09529acbad97cd0a31c563f1be8bbe1fd373b5791a6edc7862ed86a",
+    ".agent/verifiers/checks.json": "86ca284d278d20cef544d98d75ee4038246241231170be2c0548b50c16288a74",
+    ".agent/hooks/guard_contract.py": "39680855df214242623be566808a2311595eef9db1eea4b92da2e5bcd416bd26",
+    ".agent/hooks/stop_verify.py": "e2d1d880309a6c2a9fde16410a980ba96e4dc57e6174918c6d218c3bf30dfe37",
+    ".claude/settings.json": "195ddd627d55ace18a54257f01589ee992044febd97c7c132aca6ca6a55d423c",
+    "ruff.toml": "5a634f97a69b3877b816afbe6ca6eae95a91e1cf40d6d779f2a4668c277d057c",
+    ".ruff.toml": null
+  },
+  "locked_at": "2026-11-22T00:55:20",
+  "note": "passed を除く task_contract.json と保護ファイルの署名。人間が `verify.py --relock` でのみ更新する。"
+}

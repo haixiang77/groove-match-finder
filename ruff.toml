@@ -1,0 +1,13 @@
+# lint ルールを固定し、インストール済み ruff のバージョン差で判定が変わらないようにする。
+# (統合テスト F3: 設定がないと ruff 0.16 の既定 TRY004 が効き、要件「ValueError を送出」と衝突した)
+#
+# ハーネスの保護ファイル: verify.py が contract.lock の署名と照合し、guard_contract.py が AI による編集をブロックする。
+# ルールを変える場合は人間が編集し、`python3 .agent/verifiers/verify.py --relock` で再署名すること。
+# 同じディレクトリに .ruff.toml を置くとこのファイルより優先されるため、.ruff.toml も保護対象 (作成禁止)。
+
+target-version = "py311"
+line-length = 160
+
+[lint]
+# E/W: pycodestyle, F: pyflakes, B: bugbear, UP: pyupgrade, I: isort
+select = ["E", "F", "W", "B", "UP", "I"]
