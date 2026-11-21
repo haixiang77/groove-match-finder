@@ -132,13 +132,13 @@ export function rmsEnvelope(x, win, hop) {
  * @param {Float32Array} env
  * @param {number} [lag]
  */
-export function onsetFromEnvelope(env, lag = 1) {
+export function onsetFromEnvelope(env, lag = 1, gain = 100) {
   let max = 0;
   for (let i = 0; i < env.length; i++) if (env[i] > max) max = env[i];
   const out = new Float32Array(env.length);
   if (max <= 0) return out;
   const log = new Float32Array(env.length);
-  for (let i = 0; i < env.length; i++) log[i] = Math.log1p((100 * env[i]) / max);
+  for (let i = 0; i < env.length; i++) log[i] = Math.log1p((gain * env[i]) / max);
   for (let i = lag; i < env.length; i++) out[i] = Math.max(0, log[i] - log[i - lag]);
   return out;
 }

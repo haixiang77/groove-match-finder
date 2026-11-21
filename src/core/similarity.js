@@ -48,7 +48,7 @@ export function tempoSimilarity(a, b) {
   let best = { sim: 0, ratio: 1 };
   for (const r of [1, 2, 0.5]) {
     const d = Math.abs(Math.log2((b * r) / a));
-    const sim = gauss(d, 0.045) * (r === 1 ? 1 : 0.85);
+    const sim = gauss(d, 0.07) * (r === 1 ? 1 : 0.85);
     if (sim > best.sim) best = { sim, ratio: r };
   }
   return best;

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { synthLoop, PATTERNS } from './synth.js';
-import { analyzeAudio, findEnergyWindow } from '../src/audio/analyzer.js';
+import { analyzeAudio, chooseDownbeat, findEnergyWindow, rotateGrid } from '../src/audio/analyzer.js';
 import { AudioFeaturesSchema } from '../src/types.js';
 
 const analyse = (o) => analyzeAudio(synthLoop({ bars: 12, ...o }).samples, 22050);
@@ -73,4 +73,32 @@ test('findEnergyWindow picks the loud section', () => {
   for (let i = 0; i < x.length; i++) x[i] += 0.01 * Math.sin(i * 0.3);
   const w = findEnergyWindow(x, sr, 15);
   assert.ok(Math.abs(w.start / sr - 30) <= 1);
+});
+
+test('snare grid is not polluted by kick bleed (house / disco)', () => {
+  const house = analyse({ bpm: 124, ...PATTERNS.house });
+  assert.deepEqual(house.grid.snare.map((v, i) => [v, i]).filter(([v]) => v >= 0.5).map(([, i]) => i), [4, 12]);
+  const hat = [0, 2, 4, 6, 8, 10, 12, 14];
+  const disco = analyse({ bpm: 112, kick: [0, 4, 8, 12], snare: [4, 12], hat });
+  assert.deepEqual(disco.grid.snare.map((v, i) => [v, i]).filter(([v]) => v >= 0.5).map(([, i]) => i), [4, 12]);
+});
+
+test('syncopated funk kick pattern keeps its step positions (beat phase / sub-beat downbeat)', () => {
+  const f = analyse({ bpm: 100, kick: [0, 3, 6, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] });
+  assert.deepEqual(top(f.grid.kick, 4), [0, 3, 6, 10]);
+  assert.deepEqual(top(f.grid.snare, 2), [4, 12]);
+});
+
+test('step positions stay put at fast tempos where the tracked beat spacing drifts (153 BPM funk)', () => {
+  const f = analyse({ bpm: 153, kick: [0, 3, 6, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14], seed: 3 });
+  assert.deepEqual(top(f.grid.kick, 4), [0, 3, 6, 10]);
+  assert.deepEqual(top(f.grid.snare, 2), [4, 12]);
+});
+
+test('chooseDownbeat can undo a half-beat phase error', () => {
+  const g = { kick: Array(16).fill(0), snare: Array(16).fill(0), hat: Array(16).fill(0) };
+  for (const i of [0, 3, 6, 10]) g.kick[i] = 1;
+  for (const i of [4, 12]) g.snare[i] = 1;
+  const slipped = rotateGrid(g, 2);
+  assert.deepEqual(chooseDownbeat(slipped), g);
 });

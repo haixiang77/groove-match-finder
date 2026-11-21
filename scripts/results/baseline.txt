@@ -1,0 +1,51 @@
+# RefScope recognition eval  (ANALYSIS_VERSION=3)
+
+## BPM  (n=50)
+within ±1%: 40/50 (80.0%)   half(÷2): 10   double(×2): 0   other: 0
+  dnb 170 seed1 → 85 (HALF)
+  dnb 170 seed2 → 85 (HALF)
+  dnb 174 seed1 → 87 (HALF)
+  dnb 174 seed2 → 87 (HALF)
+  dnb 178 seed1 → 89 (HALF)
+  dnb 178 seed2 → 89 (HALF)
+  dubstep 140 seed1 → 70 (HALF)
+  dubstep 140 seed2 → 70 (HALF)
+  dubstep 145 seed1 → 72.54 (HALF)
+  dubstep 145 seed2 → 72.54 (HALF)
+
+## Grid F1 vs truth pattern (threshold 0.5)
+kick   exact-downbeat 76.9%   beat-rotation-invariant 76.9%
+snare  exact-downbeat 48.2%   beat-rotation-invariant 53.0%
+hat    exact-downbeat 82.1%   beat-rotation-invariant 82.1%
+mean   exact-downbeat 69.1%   beat-rotation-invariant 70.7%
+tempo-correct subset (n=40): kick 87.6%  snare 56.2%  hat 89.3%
+per genre exact F1 (kick/snare/hat): house 100/67/80  trap 64/34/95  boombap 100/52/100  reggaeton 100/80/75  dnb 33/0/45  dubstep 35/40/67  funk 68/38/100  electro 80/57/80  disco 100/67/100
+
+## Identification (library 15 patterns incl. near-variants; query = ×1.04 tempo unless noted, different seed)
+clean     13/15 (86.7%)
+noise     14/15 (93.3%)
+velocity  13/15 (86.7%)
+timing    15/15 (100.0%)
+swing     14/15 (93.3%)
+combined  15/15 (100.0%)
+harsh     11/15 (73.3%)
+tempo12   7/15 (46.7%)
+overall   102/120 (85.0%)   MRR 0.907
+  [clean] trap → top1 trap_b (rank of truth 2)
+  [clean] trap_b → top1 trap (rank of truth 2)
+  [noise] funk_b → top1 funk (rank of truth 2)
+  [velocity] trap → top1 trap_b (rank of truth 2)
+  [velocity] trap_b → top1 trap (rank of truth 2)
+  [swing] trap → top1 trap_b (rank of truth 2)
+  [harsh] dnb → top1 reggaeton_b (rank of truth 3)
+  [harsh] house_b → top1 electro (rank of truth 3)
+  [harsh] dnb_b → top1 reggaeton_b (rank of truth 3)
+  [harsh] funk_b → top1 electro (rank of truth 4)
+  [tempo12] boombap → top1 reggaeton (rank of truth 3)
+  [tempo12] reggaeton → top1 funk (rank of truth 2)
+  [tempo12] dubstep → top1 boombap_b (rank of truth 3)
+  [tempo12] funk → top1 disco (rank of truth 5)
+  [tempo12] disco → top1 house (rank of truth 4)
+  [tempo12] trap_b → top1 trap (rank of truth 5)
+  [tempo12] boombap_b → top1 reggaeton (rank of truth 3)
+  [tempo12] funk_b → top1 disco (rank of truth 2)

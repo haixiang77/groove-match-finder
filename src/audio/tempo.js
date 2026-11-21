@@ -4,7 +4,7 @@
  * (autocorrelation tempogram with a log-normal prior → Ellis 2007 beat tracker,
  * the same approach as librosa.beat.beat_track).
  */
-import { interp, mean, median, parabolicOffset, std } from './dsp.js';
+import { interp, mean, median, parabolicOffset, percentile, std } from './dsp.js';
 
 /**
  * @param {Float32Array} onset onset-strength envelope
@@ -235,11 +235,11 @@ export function regulariseBeats(beats, period, nFrames, onset) {
 /**
  * Remove per-beat jitter (e.g. a strong syncopated kick pulling a beat early)
  * with a robust local linear fit: fit over ±`radius` neighbours, reject beats
- * whose residual exceeds 8% of the period, refit. Keeps slow tempo drift.
+ * whose residual exceeds 5% of the period, refit. Keeps slow tempo drift.
  * @param {number[]} beats
  * @param {number} [radius]
  */
-export function smoothBeats(beats, radius = 8) {
+export function smoothBeats(beats, radius = 32) {
   if (beats.length < 5) return beats;
   /** @param {number[]} idx */
   const fit = (idx) => {
@@ -264,7 +264,7 @@ export function smoothBeats(beats, radius = 8) {
     let idx = Array.from({ length: b - a + 1 }, (_, k) => a + k);
     let model = fit(idx);
     for (let pass = 0; pass < 3; pass++) {
-      const tol = 0.08 * Math.abs(model.slope);
+      const tol = 0.05 * Math.abs(model.slope);
       const inliers = idx.filter((k) => Math.abs(beats[k] - (model.icpt + model.slope * k)) <= tol);
       if (inliers.length < 4 || inliers.length === idx.length) break;
       // Re-fit on the inliers but keep the full index window for the next pass.
@@ -273,4 +273,47 @@ export function smoothBeats(beats, radius = 8) {
     }
     return model.icpt + model.slope * i;
   });
+}
+
+/**
+ * Replace tracked beats by a perfectly uniform grid when the tempo is steady.
+ * The DP tracker's beat-to-beat spacing can differ from the true period by
+ * ~0.5 %, which slips a 16th-note step after ~30 beats; a global comb fit over
+ * the whole clip (period within ±1.5 %, phase within ±1/8 beat, scored at 16th
+ * resolution) removes that drift. Falls back to the tracked beats if they
+ * aren't straight (80th-percentile residual > 15 % of a period: live tempo drift).
+ * @param {number[]} beats tracked beats (frames), contiguous
+ * @param {Float32Array} onset
+ * @returns {number[]}
+ */
+export function snapToUniformGrid(beats, onset) {
+  const n = beats.length;
+  if (n < 8) return beats;
+  const p0 = median(beats.slice(1).map((b, k) => b - beats[k]));
+  const total = n - 1;
+  let best = { score: -Infinity, p: p0, ph: 0 };
+  for (let r = 0.985; r <= 1.0151; r += 0.0005) {
+    const p = p0 * r;
+    const ph0 = median(beats.map((b, k) => b - k * p));
+    for (let d = -p / 8; d <= p / 8; d += 0.25) {
+      const ph = ph0 + d;
+      let sum = 0;
+      for (let k = 0; k < total; k++) for (let j = 0; j < 4; j++) sum += interp(onset, ph + (k + j / 4) * p);
+      if (sum > best.score) best = { score: sum, p, ph };
+    }
+  }
+  const grid = beats.map((_, k) => best.ph + k * best.p);
+  // Steady tempo? Judge by how straight the tracked beats are (a constant slope error
+  // is exactly what we are fixing, so compare against their own least-squares line).
+  const mk = (n - 1) / 2;
+  const mb = mean(beats);
+  let sxy = 0;
+  let sxx = 0;
+  beats.forEach((b, k) => {
+    sxy += (k - mk) * (b - mb);
+    sxx += (k - mk) ** 2;
+  });
+  const slope = sxy / sxx;
+  const dev = percentile(beats.map((b, k) => Math.abs(b - (mb + slope * (k - mk)))), 80);
+  return dev <= 0.15 * best.p ? grid : beats;
 }

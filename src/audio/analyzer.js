@@ -25,11 +25,15 @@ import {
   stftForEach,
   windowMax,
 } from './dsp.js';
-import { estimateTempo, regulariseBeats, smoothBeats, trackBeats } from './tempo.js';
+import { estimateTempo, regulariseBeats, smoothBeats, snapToUniformGrid, trackBeats } from './tempo.js';
 
-export const ANALYSIS_VERSION = 3;
+export const ANALYSIS_VERSION = 4;
 export const HOP = 256;
 const NFFT = 1024;
+const GRID_ONSET_GAIN = 20;
+const BLEED_RATIO = 0.85; // snare/kick level ratio on a kick step below which it is bleed only
+// chooseDownbeat may also rotate by sub-beat steps (the beat tracker can lock onto an off-beat phase).
+const OFFBEAT_ROTATION_PENALTY = 0.4;
 
 export class AnalysisError extends Error {}
 
@@ -104,6 +108,20 @@ export function analyzeAudio(samples, sr) {
     hat: onsetFromEnvelope(rmsEnvelope(hatSig, envWin, HOP)),
   };
 
+  // Grid onsets use a gentler log compression than tempo tracking so that low-level
+  // inter-band bleed isn't amplified up to the level of real hits.
+  const G = GRID_ONSET_GAIN;
+  const gridOnset = {
+    kick: onsetFromEnvelope(rmsEnvelope(kickSig, envWin, HOP), 1, G),
+    snare: onsetFromEnvelope(rmsEnvelope(snareSig, envWin, HOP), 1, G),
+    hat: onsetFromEnvelope(rmsEnvelope(hatSig, envWin, HOP), 1, G),
+    mid: onsetFromEnvelope(rmsEnvelope(bandpass(samples, 1500, 6000, sr, 4), envWin, HOP), 1, G),
+  };
+  // (Near-)linear kick / snare onsets: bleed ratios are only meaningful without log compression.
+  const linOnset = {
+    kick: onsetFromEnvelope(rmsEnvelope(kickSig, envWin, HOP), 1, 0.5),
+    snare: onsetFromEnvelope(rmsEnvelope(snareSig, envWin, HOP), 1, 0.5),
+  };
   // ---- Tempo & beats ------------------------------------------------------
   // The metrical level comes mostly from kick + snare so dense hi-hats can't
   // pull the tempo to double-time; the full-band flux only breaks ties.
@@ -121,9 +139,18 @@ export function analyzeAudio(samples, sr) {
     bpm = Math.round(bpm * 200) / 100;
     beats = beats.flatMap((b, i) => (i + 1 < beats.length ? [b, (b + beats[i + 1]) / 2] : [b]));
   }
+  beats = snapToUniformGrid(beats, tempoOnset);
 
   // ---- 16-step grid ---------------------------------------------------------
-  const rawGrid = { kick: new Float64Array(16), snare: new Float64Array(16), hat: new Float64Array(16) };
+  // Each band's onset envelope lags the true hit by a different amount (filter group
+  // delay, RMS window); find the offset (in steps) at which a band's energy sits on the grid.
+  const latency = {
+    kick: bandLatency(gridOnset.kick, beats),
+    snare: bandLatency(gridOnset.snare, beats),
+    hat: bandLatency(gridOnset.hat, beats),
+    mid: bandLatency(gridOnset.mid, beats),
+  };
+  const rawGrid = { kick: new Float64Array(16), snare: new Float64Array(16), hat: new Float64Array(16), mid: new Float64Array(16), linKick: new Float64Array(16), linSnare: new Float64Array(16) };
   const counts = new Float64Array(16);
   for (let i = 0; i + 1 < beats.length; i++) {
     const b0 = beats[i];
@@ -133,9 +160,12 @@ export function analyzeAudio(samples, sr) {
       const pos = b0 + (len * j) / 4;
       const radius = Math.max(1, (len / 4) * 0.3);
       const step = phase * 4 + j;
-      rawGrid.kick[step] += windowMax(bandOnset.kick, pos, radius);
-      rawGrid.snare[step] += windowMax(bandOnset.snare, pos, radius);
-      rawGrid.hat[step] += windowMax(bandOnset.hat, pos, radius);
+      rawGrid.kick[step] += windowMax(gridOnset.kick, pos + latency.kick * len / 4, radius);
+      rawGrid.snare[step] += windowMax(gridOnset.snare, pos + latency.snare * len / 4, radius);
+      rawGrid.hat[step] += windowMax(gridOnset.hat, pos + latency.hat * len / 4, radius);
+      rawGrid.mid[step] += windowMax(gridOnset.mid, pos + latency.mid * len / 4, radius);
+      rawGrid.linKick[step] += windowMax(linOnset.kick, pos + latency.kick * len / 4, radius);
+      rawGrid.linSnare[step] += windowMax(linOnset.snare, pos + latency.snare * len / 4, radius);
       counts[step]++;
     }
   }
@@ -143,10 +173,25 @@ export function analyzeAudio(samples, sr) {
   const unrotated = { kick: [], snare: [], hat: [] };
   /** @type {Record<import('../types.js').DrumBand, number>} */
   const presence = { kick: 0, snare: 0, hat: 0 };
+  const norm = (/** @type {Float64Array} */ a) => {
+    const v = Array.from(a, (x, i) => (counts[i] ? x / counts[i] : 0));
+    const mx = Math.max(...v);
+    return { v, n: v.map((x) => (mx > 0 ? x / mx : 0)) };
+  };
+  const midN = norm(rawGrid.mid).n;
+  const kickN = norm(rawGrid.kick).n;
+  // Kick→snare-band bleed. Both bands are max-normalised, so a snare that really coincides
+  // with a kick reads ≈ the kick's level (ratio ≈ 1), whereas bleed alone sits clearly lower.
+  const snareLin = norm(rawGrid.linSnare).n;
+  const kickLin = norm(rawGrid.linKick).n;
+  const bleedOnly = new Set(kickN.map((v, i) => (v >= 0.4 && snareLin[i] < BLEED_RATIO * kickLin[i] ? i : -1)).filter((i) => i >= 0));
   for (const band of /** @type {const} */ (['kick', 'snare', 'hat'])) {
-    const avg = Array.from(rawGrid[band], (v, i) => (counts[i] ? v / counts[i] : 0));
-    const mx = Math.max(...avg);
-    unrotated[band] = avg.map((v) => (mx > 0 ? v / mx : 0));
+    const { v: avg, n: nrm } = norm(rawGrid[band]);
+    // Kick energy bleeds into the snare band. A real snare also excites the
+    // 1.5–6 kHz band at the same moment, a kick does not — gate on it.
+    const gated = band === 'snare' ? nrm.map((x, i) => x * midN[i] * (bleedOnly.has(i) ? 0.3 : 1)) : nrm;
+    const gmx = Math.max(...gated);
+    unrotated[band] = gated.map((v) => (gmx > 0 ? v / gmx : 0));
     // Presence: how strongly the best grid steps stand out against the band's typical onset level.
     const top = [...avg].sort((a, b) => b - a).slice(0, 4);
     const ref = percentile(bandOnset[band], 99) || 1;
@@ -220,6 +265,30 @@ export function analyzeAudio(samples, sr) {
 }
 
 /**
+ * Offset (in 16th-note steps, within ±0.45) at which a band's onset energy lines up
+ * best with the beat grid.
+ * @param {Float32Array} env
+ * @param {number[]} beats
+ */
+export function bandLatency(env, beats) {
+  let best = 0;
+  let bestScore = -Infinity;
+  const offs = Array.from({ length: 19 }, (_, k) => -0.45 + k * 0.05);
+  for (const off of offs) {
+    let sum = 0;
+    for (let i = 0; i + 1 < beats.length; i++) {
+      const len = (beats[i + 1] - beats[i]) / 4;
+      for (let j = 0; j < 4; j++) sum += interp(env, beats[i] + (j + off) * len);
+    }
+    if (sum > bestScore) {
+      bestScore = sum;
+      best = off;
+    }
+  }
+  return Math.abs(best) < 0.1 ? 0 : best;
+}
+
+/**
  * True when the onset envelope has strong, regular activity halfway between
  * 16th-note steps (i.e. 32nd notes at this tempo).
  * @param {Float32Array} env
@@ -269,21 +338,22 @@ export function fuseOnsets(envs, weights) {
 export function chooseDownbeat(g) {
   let best = 0;
   let bestScore = -Infinity;
-  for (let r = 0; r < 4; r++) {
-    const rot = rotateGrid(g, r * 4);
+  for (let r = 0; r < 16; r++) {
+    const rot = rotateGrid(g, r);
     const sc =
       rot.kick[0] +
       0.3 * rot.kick[8] +
       0.6 * Math.max((rot.snare[4] + rot.snare[12]) / 2, 1.1 * rot.snare[8]) -
       0.5 * rot.snare[0] -
       0.15 * rot.kick[4] +
-      0.6 * mean([3, 6, 11, 14].map((i) => rot.snare[i]));
+      0.6 * mean([3, 6, 11, 14].map((i) => rot.snare[i])) -
+      (r % 4 ? OFFBEAT_ROTATION_PENALTY : 0);
     if (sc > bestScore + 1e-9) {
       bestScore = sc;
       best = r;
     }
   }
-  return rotateGrid(g, best * 4);
+  return rotateGrid(g, best);
 }
 
 /**

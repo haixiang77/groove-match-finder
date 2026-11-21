@@ -39,3 +39,8 @@ test('identical features score ~1', () => {
   const f = A({ bpm: 140, ...PATTERNS.trap, kickDecay: 0.6 });
   assert.ok(compareFeatures(f, f).score > 0.97);
 });
+
+test('tempo similarity tolerates a ~4% pitch/time-stretch offset but not a different tempo', () => {
+  assert.ok(tempoSimilarity(125, 120).sim > 0.6, `${tempoSimilarity(125, 120).sim}`);
+  assert.ok(tempoSimilarity(124, 95).sim < 0.05);
+});

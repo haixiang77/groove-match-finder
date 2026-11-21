@@ -1,0 +1,47 @@
+# RefScope recognition eval  (ANALYSIS_VERSION=4)
+
+## BPM  (n=50)
+within ±1%: 40/50 (80.0%)   half(÷2): 10   double(×2): 0   other: 0
+  dnb 170 seed1 → 85 (HALF)
+  dnb 170 seed2 → 85 (HALF)
+  dnb 174 seed1 → 87 (HALF)
+  dnb 174 seed2 → 87 (HALF)
+  dnb 178 seed1 → 89 (HALF)
+  dnb 178 seed2 → 89 (HALF)
+  dubstep 140 seed1 → 70 (HALF)
+  dubstep 140 seed2 → 70 (HALF)
+  dubstep 145 seed1 → 72.54 (HALF)
+  dubstep 145 seed2 → 72.54 (HALF)
+
+## Grid F1 vs truth pattern (threshold 0.5)
+kick   exact-downbeat 88.0%   beat-rotation-invariant 88.0%
+snare  exact-downbeat 78.0%   beat-rotation-invariant 83.3%
+hat    exact-downbeat 86.3%   beat-rotation-invariant 86.3%
+mean   exact-downbeat 84.1%   beat-rotation-invariant 85.9%
+tempo-correct subset (n=40): kick 100.0%  snare 97.5%  hat 91.7%
+per genre exact F1 (kick/snare/hat): house 100/100/80  trap 100/88/97  boombap 100/100/100  reggaeton 100/100/89  dnb 33/0/64  dubstep 50/0/67  funk 100/100/100  electro 100/100/80  disco 100/100/100
+
+## Identification (library 15 patterns incl. near-variants; query = ×1.04 tempo unless noted, different seed)
+clean     13/15 (86.7%)
+noise     13/15 (86.7%)
+velocity  14/15 (93.3%)
+timing    15/15 (100.0%)
+swing     15/15 (100.0%)
+combined  15/15 (100.0%)
+harsh     11/15 (73.3%)
+tempo12   10/15 (66.7%)
+overall   106/120 (88.3%)   MRR 0.930
+  [clean] trap → top1 trap_b (rank of truth 2)
+  [clean] trap_b → top1 trap (rank of truth 2)
+  [noise] trap_b → top1 trap (rank of truth 2)
+  [noise] funk_b → top1 funk (rank of truth 2)
+  [velocity] trap_b → top1 trap (rank of truth 2)
+  [harsh] dnb → top1 reggaeton_b (rank of truth 3)
+  [harsh] house_b → top1 house (rank of truth 2)
+  [harsh] dnb_b → top1 reggaeton_b (rank of truth 5)
+  [harsh] funk_b → top1 funk (rank of truth 2)
+  [tempo12] dubstep → top1 boombap (rank of truth 8)
+  [tempo12] funk → top1 disco (rank of truth 2)
+  [tempo12] disco → top1 house (rank of truth 4)
+  [tempo12] trap_b → top1 trap (rank of truth 5)
+  [tempo12] funk_b → top1 disco (rank of truth 2)
