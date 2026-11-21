@@ -7,6 +7,7 @@
 import { decodeToMono } from './audio/decode.js';
 import { findEnergyWindow } from './audio/analyzer.js';
 import { AnalysisPool } from './audio/worker-pool.js';
+import { GridPlayer } from './ui/grid-player.js';
 import { runPipeline } from './core/pipeline.js';
 import { defaultSettings, loadSettings } from './settings.js';
 import { showError } from './ui/banner.js';
@@ -47,6 +48,7 @@ const state = {
 };
 
 const pool = new AnalysisPool();
+const gridPlayer = new GridPlayer(() => setGridButton(false));
 
 // ─────────────────────────────── elements ───────────────────────────────
 /** Looked up once in an isolated init step (a missing element throws). */
@@ -61,6 +63,7 @@ function lookupElements() {
   regionLabel: $('region-label'),
   changeFile: $('change-file'),
   playRegion: /** @type {HTMLButtonElement} */ ($('play-region')),
+  playGrid: /** @type {HTMLButtonElement} */ ($('play-grid')),
   inputAudio: /** @type {HTMLAudioElement} */ ($('input-audio')),
   manualArtist: /** @type {HTMLInputElement} */ ($('manual-artist')),
   manualTitle: /** @type {HTMLInputElement} */ ($('manual-title')),
@@ -184,6 +187,7 @@ function updateKeyStatus() {
 async function loadFile(file) {
   if (!els) throw new Error('アプリの初期化が完了していません');
   stopPlayback();
+  els.playGrid.disabled = true;
   state.file = file;
   els.dropSection.hidden = true;
   els.trackSection.hidden = false;
@@ -230,6 +234,7 @@ function setRegion(start, end) {
 function setupPlayback() {
 els.playRegion.addEventListener('click', () => {
   if (!els.inputAudio.paused) return stopPlayback();
+  gridPlayer.stop();
   els.inputAudio.currentTime = state.region.start;
   els.inputAudio.play().catch(() => {});
   setPlayButton(true);
@@ -239,9 +244,23 @@ els.inputAudio.addEventListener('timeupdate', () => {
   if (els.inputAudio.currentTime >= state.region.end) stopPlayback();
 });
 els.inputAudio.addEventListener('pause', () => setPlayButton(false));
+els.playGrid.addEventListener('click', () => {
+  if (gridPlayer.playing) return gridPlayer.stop();
+  if (!state.features) return;
+  stopPlayback();
+  gridPlayer.start(state.features);
+  setGridButton(gridPlayer.playing);
+});
 }
 
+/** @param {boolean} playing */
+function setGridButton(playing) {
+  els.playGrid.replaceChildren(icon(playing ? 'pause' : 'play'), h('span', null, playing ? '停止' : 'グリッドを試聴'));
+}
+
+/** Stops both the original-excerpt and the grid preview. */
 function stopPlayback() {
+  gridPlayer.stop();
   els.inputAudio.pause();
   waveform?.setPlayhead(-1);
   setPlayButton(false);
@@ -286,6 +305,7 @@ async function startRun() {
         onLog: addLog,
         onInputFeatures: (f) => {
           state.features = f;
+          els.playGrid.disabled = false;
           els.analysisSection.hidden = false;
           els.stats.replaceChildren(...renderStats(f));
           els.inputHeatmap.replaceChildren(renderHeatmap(f.grid));
@@ -343,6 +363,8 @@ async function startRun() {
 }
 
 function resetResults() {
+  stopPlayback();
+  els.playGrid.disabled = true;
   Object.assign(state, { features: null, identification: null, genres: null, scored: [], ranked: [], failed: [], explanation: null });
   els.log.replaceChildren();
   els.steps.querySelectorAll('li').forEach((li) => {

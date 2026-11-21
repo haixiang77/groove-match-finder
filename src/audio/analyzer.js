@@ -26,8 +26,10 @@ import {
   windowMax,
 } from './dsp.js';
 import { estimateTempo, regulariseBeats, smoothBeats, snapToUniformGrid, trackBeats } from './tempo.js';
+import { canonicalizeBar, cleanGrid, rotateGrid } from './grid.js';
+export { rotateGrid };
 
-export const ANALYSIS_VERSION = 4;
+export const ANALYSIS_VERSION = 5;
 export const HOP = 256;
 const NFFT = 1024;
 const GRID_ONSET_GAIN = 20;
@@ -197,7 +199,7 @@ export function analyzeAudio(samples, sr) {
     const ref = percentile(bandOnset[band], 99) || 1;
     presence[band] = c01(mean(top) / ref);
   }
-  const grid = chooseDownbeat(unrotated);
+  const grid = cleanGrid(canonicalizeBar(chooseDownbeat(unrotated)));
 
   // ---- Groove metrics -------------------------------------------------------
   const swingRes = measureSwing(grid, presence.hat > 0.2 ? bandOnset.hat : onset, beats);
@@ -354,17 +356,6 @@ export function chooseDownbeat(g) {
     }
   }
   return rotateGrid(g, best);
-}
-
-/**
- * @param {import('../types.js').RhythmGrid} g
- * @param {number} shift steps
- * @returns {import('../types.js').RhythmGrid}
- */
-export function rotateGrid(g, shift) {
-  /** @param {number[]} a */
-  const rot = (a) => a.map((_, i) => a[(i + shift) % 16]);
-  return { kick: rot(g.kick), snare: rot(g.snare), hat: rot(g.hat) };
 }
 
 /**
