@@ -61,6 +61,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: clip;
 }
 a {
   color: var(--accent);
@@ -170,6 +171,9 @@ code {
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 12px;
+}
+.card-head > * {
+  min-width: 0;
 }
 .grid-2 {
   display: grid;
@@ -387,6 +391,7 @@ select:focus-visible {
 .waveform {
   display: block;
   width: 100%;
+  max-width: 100%;
   height: 96px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -394,6 +399,7 @@ select:focus-visible {
 }
 .track-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
 }
@@ -519,9 +525,7 @@ select:focus-visible {
   font-weight: 750;
   font-variant-numeric: tabular-nums;
   display: block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .stat-sub {
   font-size: 0.72rem;
@@ -588,7 +592,7 @@ select:focus-visible {
 }
 .bb-row {
   display: grid;
-  grid-template-columns: 64px 1fr 72px;
+  grid-template-columns: 64px minmax(0, 1fr) 72px;
   gap: 10px;
   align-items: center;
   font-size: 0.8rem;
@@ -649,7 +653,8 @@ select:focus-visible {
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface-2);
-  white-space: nowrap;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .chip b {
   font-variant-numeric: tabular-nums;
@@ -773,7 +778,7 @@ select:focus-visible {
 }
 .bd-row {
   display: grid;
-  grid-template-columns: 76px 1fr 40px;
+  grid-template-columns: 76px minmax(0, 1fr) 40px;
   gap: 8px;
   align-items: center;
   font-size: 0.76rem;
@@ -800,6 +805,7 @@ select:focus-visible {
   font-size: 0.84rem;
   display: grid;
   gap: 3px;
+  overflow-wrap: anywhere;
 }
 .result-actions {
   grid-column: 1 / -1;
@@ -836,6 +842,7 @@ select:focus-visible {
   background: var(--surface-2);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   font-size: 0.84rem;
+  overflow-wrap: anywhere;
 }
 .explain-ai p {
   margin: 0 0 4px;
@@ -855,20 +862,23 @@ select:focus-visible {
 .rejected-list li {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
   padding: 6px 10px;
   border-radius: 8px;
   background: var(--surface-2);
 }
 .rejected-list li span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   min-width: 0;
+  flex: 0 1 auto;
+  overflow-wrap: anywhere;
 }
 .rejected-list .why {
   color: var(--muted);
-  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 0;
+  text-align: right;
+  overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
 .empty {
@@ -973,7 +983,7 @@ legend {
 }
 .range {
   display: grid;
-  grid-template-columns: 110px 1fr 44px;
+  grid-template-columns: 110px minmax(0, 1fr) 44px;
   gap: 10px;
   align-items: center;
   font-size: 0.84rem;
@@ -1029,4 +1039,29 @@ legend {
     grid-template-columns: 40px repeat(16, minmax(0, 1fr));
     gap: 2px;
   }
+  .rejected-list li {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .rejected-list .why {
+    flex: none;
+    text-align: left;
+  }
+  .range {
+    grid-template-columns: 84px minmax(0, 1fr) 40px;
+    gap: 8px;
+  }
+  .dialog-head,
+  .dialog-foot {
+    padding: 12px 14px;
+    flex-wrap: wrap;
+  }
+  .dialog-body {
+    padding: 14px;
+  }
+}
+canvas,
+img,
+audio {
+  max-width: 100%;
 }

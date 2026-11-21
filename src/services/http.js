@@ -6,6 +6,9 @@
  */
 import { sleep } from '../util.js';
 
+/** Backoff before each network-error retry in fetchJson (ms). */
+const NET_BACKOFF_MS = [1000, 3000];
+
 export class HttpError extends Error {
   /** @param {string} message @param {number} status @param {string} url */
   constructor(message, status, url) {
@@ -64,15 +67,29 @@ export async function fetchWithTimeout(url, init = {}) {
 }
 
 /**
- * Fetch JSON with retries on 429 / 5xx (exponential backoff).
+ * Fetch JSON with retries: 429 / 5xx (exponential backoff), network errors
+ * (~1s, ~3s) and 403 (rate-limit-like, once after ~2s).
  * @param {string} url
- * @param {RequestInit & {timeoutMs?: number, retries?: number}} [init]
+ * @param {RequestInit & {timeoutMs?: number, retries?: number, netRetries?: number, delayScale?: number}} [init]
  * @returns {Promise<unknown>}
  */
 export async function fetchJson(url, init = {}) {
-  const { retries = 2, ...rest } = init;
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetchWithTimeout(url, rest);
+  const { retries = 2, netRetries = 2, delayScale = 1, ...rest } = init;
+  const signal = rest.signal ?? undefined;
+  let netAttempt = 0;
+  let forbiddenRetried = false;
+  for (let attempt = 0; ; ) {
+    /** @type {Response} */
+    let res;
+    try {
+      res = await fetchWithTimeout(url, rest);
+    } catch (err) {
+      if (err instanceof NetworkError && netAttempt < netRetries) {
+        await sleep(NET_BACKOFF_MS[netAttempt++] * delayScale, signal);
+        continue;
+      }
+      throw err;
+    }
     if (res.ok) {
       const text = await res.text();
       try {
@@ -83,7 +100,13 @@ export async function fetchJson(url, init = {}) {
     }
     if ((res.status === 429 || res.status >= 500) && attempt < retries) {
       const retryAfter = Number(res.headers.get('retry-after'));
-      await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 800 * 2 ** attempt, rest.signal ?? undefined);
+      await sleep((Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 800 * 2 ** attempt) * delayScale, signal);
+      attempt++;
+      continue;
+    }
+    if (res.status === 403 && !forbiddenRetried) {
+      forbiddenRetried = true;
+      await sleep(2000 * delayScale, signal);
       continue;
     }
     let detail = '';
@@ -96,23 +119,38 @@ export async function fetchJson(url, init = {}) {
   }
 }
 
+/** @param {number} status */
+const isTransientStatus = (status) => status === 403 || status === 429 || status >= 500;
+
 /**
- * Try a direct CORS request first, then the user's proxy (if configured).
+ * Try a direct CORS request first (one retry after ~1.5s on a network error
+ * or 403/429/5xx), then the user's proxy (if configured).
  * @param {string} url
  * @param {string} proxy
- * @param {RequestInit & {timeoutMs?: number}} [init]
+ * @param {RequestInit & {timeoutMs?: number, delayScale?: number}} [init]
  */
 export async function fetchCorsAware(url, proxy, init = {}) {
-  try {
-    const res = await fetchWithTimeout(url, init);
-    if (res.ok || !proxy) return res;
-    if (res.status !== 403) return res;
-  } catch (err) {
-    if (!(err instanceof NetworkError) || !proxy) throw err;
+  const { delayScale = 1, ...rest } = init;
+  /** @type {Response | undefined} */
+  let res;
+  /** @type {unknown} */
+  let netErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    res = undefined;
+    netErr = undefined;
+    try {
+      res = await fetchWithTimeout(url, rest);
+      if (!isTransientStatus(res.status)) return res;
+    } catch (err) {
+      if (!(err instanceof NetworkError)) throw err;
+      netErr = err;
+    }
+    if (attempt === 0) await sleep(1500 * delayScale, rest.signal ?? undefined);
   }
-  return fetchWithTimeout(viaProxy(url, proxy), init);
+  if (proxy) return fetchWithTimeout(viaProxy(url, proxy), rest);
+  if (res) return res;
+  throw netErr;
 }
-
 let jsonpCounter = 0;
 
 /**

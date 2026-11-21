@@ -21,8 +21,8 @@ import { explainMatches, identifyWithGemini } from '../services/gemini.js';
 import * as lastfm from '../services/lastfm.js';
 import { getRecordingTags } from '../services/musicbrainz.js';
 import { resolveTrack, searchSongs, toCandidate } from '../services/itunes.js';
-import { fetchCorsAware, NetworkError } from '../services/http.js';
-import { errorMessage, isAbortError, mapPool, parseFileName, trackKey } from '../util.js';
+import { fetchCorsAware, HttpError, NetworkError } from '../services/http.js';
+import { errorMessage, isAbortError, mapPool, parseFileName, sleep, trackKey } from '../util.js';
 
 /** @typedef {import('../types.js').AudioFeatures} AudioFeatures */
 /** @typedef {import('../types.js').Candidate} Candidate */
@@ -298,37 +298,66 @@ export async function runPipeline(ctx) {
   let corsBlocked = 0;
   /** @type {Set<number>} */
   const seenItunes = new Set(shortlist.flatMap((c) => (c.itunesId ? [c.itunesId] : [])));
+  /**
+   * Resolve + analyse + score one candidate. On the first pass, transient
+   * network/HTTP failures are deferred (returned, nothing reported) so they can
+   * be retried once; everything else is reported exactly once via onScored.
+   * @param {Candidate} cand
+   * @param {boolean} final true on the retry pass: report every failure
+   * @returns {Promise<boolean>} true when the candidate was deferred
+   */
+  const processCandidate = async (cand, final) => {
+    try {
+      if (!cand.previewUrl && !cand.localFile) {
+        const t = await resolveTrack(cand.artist, cand.title, itunesOpts);
+        if (!t?.previewUrl) throw new Error('iTunes にプレビュー音源なし');
+        if (seenItunes.has(t.trackId)) throw new Error('他の候補と同一曲のためスキップ');
+        seenItunes.add(t.trackId);
+        const resolved = toCandidate(t, cand.sources[0], cand.weight);
+        Object.assign(cand, { ...resolved, sources: cand.sources, weight: cand.weight, key: cand.key });
+        if (exclude.includes(trackKey(t.artistName, t.trackName))) throw new Error('入力曲と同一のため除外');
+      }
+      const feats = await analyseCandidate(cand, settings.corsProxy, signal, pool);
+      const cmp = compareFeatures(features, feats, settings.weights);
+      /** @type {ScoredCandidate} */
+      const sc = { candidate: cand, features: feats, ...cmp, passed: cmp.score >= settings.minScore };
+      scored.push(sc);
+      hooks.onScored(sc, cand, ++done, shortlist.length);
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      if (!final && (err instanceof NetworkError || err instanceof HttpError)) return true;
+      failed++;
+      if (err instanceof NetworkError) corsBlocked++;
+      hooks.onScored(null, cand, ++done, shortlist.length, errorMessage(err));
+    }
+    return false;
+  };
+  /** @type {Candidate[]} */
+  const retryList = [];
   await mapPool(
     shortlist,
     3,
     async (cand) => {
-      try {
-        if (!cand.previewUrl && !cand.localFile) {
-          const t = await resolveTrack(cand.artist, cand.title, itunesOpts);
-          if (!t?.previewUrl) throw new Error('iTunes にプレビュー音源なし');
-          if (seenItunes.has(t.trackId)) throw new Error('他の候補と同一曲のためスキップ');
-          seenItunes.add(t.trackId);
-          const resolved = toCandidate(t, cand.sources[0], cand.weight);
-          Object.assign(cand, { ...resolved, sources: cand.sources, weight: cand.weight, key: cand.key });
-          if (exclude.includes(trackKey(t.artistName, t.trackName))) throw new Error('入力曲と同一のため除外');
-        }
-        const feats = await analyseCandidate(cand, settings.corsProxy, signal, pool);
-        const cmp = compareFeatures(features, feats, settings.weights);
-        /** @type {ScoredCandidate} */
-        const sc = { candidate: cand, features: feats, ...cmp, passed: cmp.score >= settings.minScore };
-        scored.push(sc);
-        hooks.onScored(sc, cand, ++done, shortlist.length);
-      } catch (err) {
-        if (isAbortError(err)) throw err;
-        failed++;
-        if (err instanceof NetworkError) corsBlocked++;
-        hooks.onScored(null, cand, ++done, shortlist.length, errorMessage(err));
-      }
-      hooks.onStep('filter', 'running', `${done} / ${shortlist.length}`);
+      if (await processCandidate(cand, false)) retryList.push(cand);
+      hooks.onStep('filter', 'running', `${done} / ${shortlist.length}${retryList.length ? `（再試行待ち ${retryList.length}）` : ''}`);
     },
     signal,
   );
-  if (corsBlocked > 0 && corsBlocked >= shortlist.length / 2 && !settings.corsProxy)
+  // Second pass: transient failures (rate limiting etc.) get one more chance.
+  if (retryList.length) {
+    log(`ネットワークエラーの候補を再試行します（${retryList.length} 件）`, 'warn');
+    hooks.onStep('filter', 'running', `${done} / ${shortlist.length}（${retryList.length} 件を再試行します）`);
+    await sleep(3000, signal);
+    await mapPool(
+      retryList,
+      2,
+      async (cand) => {
+        await processCandidate(cand, true);
+        hooks.onStep('filter', 'running', `${done} / ${shortlist.length}`);
+      },
+      signal,
+    );
+  }  if (corsBlocked > 0 && corsBlocked >= shortlist.length / 2 && !settings.corsProxy)
     log('プレビュー音源の取得がブラウザ (CORS) にブロックされました。設定で CORS プロキシ（README 参照）を指定してください。', 'error');
 
   scored.sort((a, b) => b.score - a.score);
@@ -387,7 +416,7 @@ async function analyseCandidate(cand, proxy, signal, pool) {
   if (cand.localFile) data = await cand.localFile.arrayBuffer();
   else {
     const res = await fetchCorsAware(/** @type {string} */ (cand.previewUrl), proxy, { signal, timeoutMs: 30000 });
-    if (!res.ok) throw new Error(`プレビュー取得失敗 HTTP ${res.status}`);
+    if (!res.ok) throw new HttpError(`プレビュー取得失敗 HTTP ${res.status}`, res.status, /** @type {string} */ (cand.previewUrl));
     data = await res.arrayBuffer();
   }
   const { samples, sr } = await decodeToMono(data);
