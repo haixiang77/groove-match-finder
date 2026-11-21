@@ -174,6 +174,9 @@ export const AudioFeaturesSchema = s.object({
  * @property {number} tempoRatio       1, 2 or 0.5 (half/double-time match)
  * @property {string[]} reasons        Rule-based explanation lines (Japanese)
  * @property {boolean} passed
+ * @property {number} [effectiveScore]  Score after diversity/lineage re-ranking (`score` stays acoustic)
+ * @property {number} [artistFactor]    Same-artist dampening multiplier applied (1 = none)
+ * @property {number} [lineageBoost]    Genre-lineage multiplier applied (1 = none)
  */
 
 export {};

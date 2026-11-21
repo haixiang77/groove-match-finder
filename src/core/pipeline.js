@@ -13,6 +13,7 @@
 import { decodeToMono, encodeWav, blobToBase64 } from '../audio/decode.js';
 import { findEnergyWindow } from '../audio/analyzer.js';
 import { CandidatePool } from './candidates.js';
+import { rerank } from './rerank.js';
 import { compareFeatures } from './similarity.js';
 import { expandGenres, genreLabel, genreSearchTerm, GENRE_BY_ID, skeletonGenres, tagsToGenres } from './ontology.js';
 import { identifyWithACRCloud, identifyWithAudD } from '../services/fingerprint.js';
@@ -331,8 +332,13 @@ export async function runPipeline(ctx) {
     log('プレビュー音源の取得がブラウザ (CORS) にブロックされました。設定で CORS プロキシ（README 参照）を指定してください。', 'error');
 
   scored.sort((a, b) => b.score - a.score);
-  const ranked = scored.filter((r) => r.passed).slice(0, settings.topN);
-  const rejected = scored.filter((r) => !ranked.includes(r));
+  // Diversity + lineage: dampen same-artist runs, favour the input's genre family.
+  const reordered = rerank(scored, new Set(expanded.map((g) => g.id)), { minScore: settings.minScore });
+  const dampened = reordered.filter((r) => (r.artistFactor ?? 1) < 1).length;
+  const boosted = reordered.filter((r) => (r.lineageBoost ?? 1) > 1).length;
+  log(`順位補正: 同一アーティスト減点 ${dampened} 件 / ジャンル系統加点 ${boosted} 件`);
+  const ranked = reordered.filter((r) => r.passed).slice(0, settings.topN);
+  const rejected = reordered.filter((r) => !ranked.includes(r));
   hooks.onRanked({ ranked, rejected, failed });
   hooks.onStep('filter', 'done', `${scored.length} 件解析 → ${ranked.length} 件が合格（しきい値 ${Math.round(settings.minScore * 100)}%）`);
   signal.throwIfAborted();

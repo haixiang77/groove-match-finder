@@ -3,7 +3,16 @@
  * Step 2 — candidate pool: merge tracks from Last.fm / iTunes / Gemini /
  * ontology searches, de-duplicate them, and pick a diverse shortlist.
  */
-import { trackKey } from '../util.js';
+import { artistTokens, trackKey } from '../util.js';
+
+/** Share of the shortlist reserved for lineage-sourced candidates. */
+export const LINEAGE_SHARE = 0.4;
+
+/** Source labels from genre lineage: 系統樹 / Last.fm タグ (tag charts) / Gemini 提案. Artist-neighbourhood sources (類似曲, 類似アーティスト) are deliberately excluded. */
+const LINEAGE_SOURCE = /系統樹|^Last\.fm タグ|^Gemini 提案$/;
+
+/** @param {Candidate} c */
+export const isLineageCandidate = (c) => c.sources.some((s) => LINEAGE_SOURCE.test(s));
 
 /** @typedef {import('../types.js').Candidate} Candidate */
 
@@ -43,26 +52,38 @@ export class CandidatePool {
   }
 
   /**
-   * Highest-weight candidates with at most `perArtist` tracks per artist.
-   * Local reference files are always kept.
+   * Verification pool: local files always, then up to `limit` remote candidates.
+   * Pass 1 reserves ceil(limit * LINEAGE_SHARE) slots for lineage-sourced
+   * candidates (genre tree / tag charts / similar artists / Gemini); pass 2 fills
+   * the rest by weight. At most `perArtist` tracks per artist (collaborators
+   * share a normalised token, so "A & B" counts against "A").
    * @param {number} limit
    * @param {number} [perArtist]
    * @returns {Candidate[]}
    */
   shortlist(limit, perArtist = 2) {
     const all = [...this.items.values()].sort((a, b) => b.weight - a.weight);
-    /** @type {Candidate[]} */
     const out = all.filter((c) => c.localFile);
+    /** @type {Set<Candidate>} */
+    const picked = new Set();
     /** @type {Map<string, number>} */
-    const perArtistCount = new Map();
-    for (const c of all) {
-      if (c.localFile) continue;
-      if (out.length >= limit + out.filter((x) => x.localFile).length) break;
-      const a = c.artist.toLowerCase();
-      const n = perArtistCount.get(a) ?? 0;
-      if (n >= perArtist) continue;
-      perArtistCount.set(a, n + 1);
+    const counts = new Map();
+    /** @param {Candidate} c */
+    const tryPick = (c) => {
+      const tokens = artistTokens(c.artist);
+      for (const t of tokens) if ((counts.get(t) ?? 0) >= perArtist) return;
+      for (const t of tokens) counts.set(t, (counts.get(t) ?? 0) + 1);
+      picked.add(c);
       out.push(c);
+    };
+    const reserved = Math.ceil(limit * LINEAGE_SHARE);
+    for (const c of all) {
+      if (picked.size >= reserved) break;
+      if (!c.localFile && isLineageCandidate(c)) tryPick(c);
+    }
+    for (const c of all) {
+      if (picked.size >= limit) break;
+      if (!c.localFile && !picked.has(c)) tryPick(c);
     }
     return out;
   }

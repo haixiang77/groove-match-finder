@@ -175,3 +175,32 @@ export function formatTime(seconds) {
   const sec = Math.floor(seconds % 60);
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
+
+/**
+ * Normalised artist tokens: lowercase, `feat.`/`ft.` suffix dropped, and
+ * collaborations split on `&`, `×`, standalone `x`, `and`, `、` and `,`.
+ * Two artist strings denote the same artist when their token sets intersect.
+ * @param {string} artist
+ * @returns {Set<string>}
+ */
+export function artistTokens(artist) {
+  const s = String(artist ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\s*[([]\s*(feat|ft)\b.*?[)\]]/g, '')
+    .replace(/\s+(feat|ft)\b\.?\s+.*$/g, '');
+  /** @type {Set<string>} */
+  const out = new Set();
+  for (const part of s.split(/\s*[&×、,]\s*|\s+x\s+|\s+and\s+/)) {
+    const t = part.trim();
+    if (t) out.add(t);
+  }
+  return out;
+}
+
+/** @param {string} a @param {string} b */
+export function sameArtist(a, b) {
+  const x = artistTokens(a);
+  for (const t of artistTokens(b)) if (x.has(t)) return true;
+  return false;
+}
