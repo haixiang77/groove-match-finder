@@ -361,6 +361,19 @@ export async function runPipeline(ctx) {
     log('プレビュー音源の取得がブラウザ (CORS) にブロックされました。設定で CORS プロキシ（README 参照）を指定してください。', 'error');
 
   scored.sort((a, b) => b.score - a.score);
+  // Per-candidate Last.fm tags (top acoustic scorers only) feed the lineage factor;
+  // candidates without tags fall back to the DSP skeleton inside rerank().
+  if (settings.lastfmKey) {
+    const top = scored.slice(0, lastfm.CANDIDATE_TAG_LIMIT);
+    const res = await mapPool(top, 3, (sc) => lastfm.getCandidateTags(sc.candidate.artist, sc.candidate.title, settings.lastfmKey, signal), signal);
+    let tagged = 0;
+    res.forEach((r, i) => {
+      if (!r.ok || !r.value) return;
+      top[i].candidate.tags = r.value;
+      tagged++;
+    });
+    log(`Last.fm 候補タグ: ${tagged} / ${top.length} 件で系統判定に使用（他は音響骨格で判定）`);
+  }
   // Diversity + lineage: dampen same-artist runs, favour the input's genre family.
   const reordered = rerank(scored, new Set(expanded.map((g) => g.id)), { minScore: settings.minScore });
   const dampened = reordered.filter((r) => (r.artistFactor ?? 1) < 1).length;

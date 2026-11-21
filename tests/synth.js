@@ -14,7 +14,7 @@ function rng(seed) {
 
 /**
  * @param {{bpm:number, bars?:number, sr?:number, kick?:number[], snare?:number[], hat?:number[],
- *   swing?:number, velJitter?:number, timingJitterMs?:number, noise?:number, kickDecay?:number, chord?:number[], pump?:boolean, seed?:number}} o
+ *   swing?:number, velJitter?:number, timingJitterMs?:number, noise?:number, kickDecay?:number, chord?:number[], melody?:number[], pump?:boolean, seed?:number}} o
  */
 export function synthLoop(o) {
   const sr = o.sr ?? 22050;
@@ -67,6 +67,19 @@ export function synthLoop(o) {
     for (const s of o.kick ?? []) addKick(jit(stepTime(bar, s)));
     for (const s of o.snare ?? []) addSnare(jit(stepTime(bar, s)));
     for (const s of o.hat ?? []) addHat(jit(stepTime(bar, s)));
+  }
+  // Tonal (vocal/keys-like) note onsets inside the snare band: sustained harmonics, no noise burst.
+  for (const s of o.melody ?? []) {
+    for (let bar = 0; bar < bars; bar++) {
+      const s0 = Math.round(stepTime(bar, s) * sr);
+      const f0 = 330 + 55 * ((bar + s) % 4);
+      for (let i = 0; i < sr * 0.4 && s0 + i < len; i++) {
+        const t = i / sr;
+        let v = 0;
+        for (let h = 1; h <= 4; h++) v += Math.sin(2 * Math.PI * f0 * h * t) / h;
+        x[s0 + i] += 0.35 * v * Math.min(1, t / 0.01) * Math.exp(-t / 0.25);
+      }
+    }
   }
   if (o.chord) {
     const beatDur = 60 / o.bpm;

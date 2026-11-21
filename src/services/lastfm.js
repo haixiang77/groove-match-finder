@@ -64,6 +64,50 @@ export async function getArtistTags(artist, apiKey, signal) {
   return normaliseTags(s.oneOrMany(Tag).parse(data?.toptags?.tag));
 }
 
+/** Max candidates that get a per-candidate tag lookup (API cost cap). */
+export const CANDIDATE_TAG_LIMIT = 12;
+/** Fewer track tags than this → artist tags are appended. */
+const MIN_TRACK_TAGS = 3;
+/** @type {Map<string, Promise<{name: string, weight: number}[] | null>>} */
+const candidateTagCache = new Map();
+
+/** Drop the candidate tag cache (tests). */
+export function clearCandidateTagCache() {
+  candidateTagCache.clear();
+}
+
+/**
+ * Tags for one candidate (track tags, topped up with artist tags). Cached per
+ * artist+title, concurrent calls share one request. Never throws except on abort:
+ * missing key / failure / no tags → null.
+ * @param {string} artist @param {string} track @param {string} apiKey @param {AbortSignal} [signal]
+ * @returns {Promise<{name: string, weight: number}[] | null>}
+ */
+export function getCandidateTags(artist, track, apiKey, signal) {
+  if (!apiKey) return Promise.resolve(null);
+  const key = `${artist.toLowerCase()}|${track.toLowerCase()}`;
+  const hit = candidateTagCache.get(key);
+  if (hit) return hit;
+  const p = (async () => {
+    try {
+      let tags = await getTrackTags(artist, track, apiKey, signal).catch((err) => {
+        if (signal?.aborted) throw err;
+        return /** @type {{name: string, weight: number}[]} */ ([]);
+      });
+      if (tags.length < MIN_TRACK_TAGS) tags = [...tags, ...(await getArtistTags(artist, apiKey, signal))];
+      return tags.length ? tags : null;
+    } catch (err) {
+      if (signal?.aborted) {
+        candidateTagCache.delete(key);
+        throw err;
+      }
+      return null;
+    }
+  })();
+  candidateTagCache.set(key, p);
+  return p;
+}
+
 /**
  * @param {string} artist @param {string} apiKey @param {AbortSignal} [signal]
  * @returns {Promise<{name: string, match: number}[]>}

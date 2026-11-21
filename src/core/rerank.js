@@ -4,7 +4,7 @@
  * Pure: the acoustic `score` is never touched; `effectiveScore` drives the order.
  */
 import { artistTokens } from '../util.js';
-import { tagToGenre, skeletonGenres } from './ontology.js';
+import { tagToGenre, tagsToGenres, skeletonGenres } from './ontology.js';
 
 /** @typedef {import('../types.js').ScoredCandidate} ScoredCandidate */
 
@@ -56,13 +56,28 @@ export function lineageAffinity(genreScores, lineageSet) {
 }
 
 /**
- * Default genre-score extractor: DSP skeleton guesses from the candidate's own features.
+ * DSP skeleton guesses from the candidate's own features.
  * @param {ScoredCandidate} sc
  * @returns {{id: string, score: number}[]}
  */
 function skeletonScoresOf(sc) {
   const f = sc.features;
   return f && f.traits && typeof f.bpm === 'number' ? skeletonGenres(f) : [];
+}
+
+/**
+ * Genre guesses for a candidate: Last.fm tags (via tagsToGenres) when they map to
+ * at least one genre, otherwise the DSP skeleton.
+ * @param {ScoredCandidate} sc
+ * @returns {{scores: {id: string, score: number}[], source: 'tags' | 'skeleton'}}
+ */
+export function genreGuess(sc) {
+  const tags = sc.candidate.tags;
+  if (tags && tags.length) {
+    const scores = [...tagsToGenres(tags)].map(([id, score]) => ({ id, score }));
+    if (scores.length) return { scores, source: 'tags' };
+  }
+  return { scores: skeletonScoresOf(sc), source: 'skeleton' };
 }
 
 /**
@@ -76,14 +91,15 @@ function skeletonScoresOf(sc) {
 export function rerank(scored, lineage, opts = {}) {
   /** @type {Map<string, number>} */
   const seen = new Map();
-  const genreScoresOf = opts.genreScoresOf ?? skeletonScoresOf;
+  const custom = opts.genreScoresOf;
   const adjusted = scored.map((sc, oldRank) => {
     const tokens = artistTokens(sc.candidate.artist);
     let prior = 0;
     for (const t of tokens) prior = Math.max(prior, seen.get(t) ?? 0);
     for (const t of tokens) seen.set(t, (seen.get(t) ?? 0) + 1);
     const artistFactor = ARTIST_DAMPEN[Math.min(prior, ARTIST_DAMPEN.length - 1)];
-    const skeleton = genreScoresOf(sc);
+    const guess = custom ? { scores: custom(sc), source: undefined } : genreGuess(sc);
+    const skeleton = guess.scores;
     const hasMeta = Boolean(sc.candidate.genre);
     const metaFloor = genreIds(sc.candidate.genre).some((id) => lineage.has(id)) ? METADATA_AFFINITY : 0;
     // No audio guesses and no metadata genre: nothing known, so stay neutral.
@@ -91,7 +107,8 @@ export function rerank(scored, lineage, opts = {}) {
       ? Math.max(lineageAffinity(skeleton, lineage), metaFloor)
       : hasMeta ? metaFloor : NEUTRAL_AFFINITY;
     const lineageBoost = LINEAGE_BASE + LINEAGE_SPAN * affinity;
-    return { sc, oldRank, artistFactor, lineageBoost, effectiveScore: sc.score * artistFactor * lineageBoost };
+    const basis = guess.source === 'tags' ? '（Last.fm タグ由来）' : guess.source === 'skeleton' && skeleton.length ? '（音響骨格由来）' : '';
+    return { sc, oldRank, basis, artistFactor, lineageBoost, effectiveScore: sc.score * artistFactor * lineageBoost };
   });
   const order = [...adjusted].sort((a, b) => b.effectiveScore - a.effectiveScore || a.oldRank - b.oldRank);
   return order.map((a, newRank) => {
@@ -101,9 +118,9 @@ export function rerank(scored, lineage, opts = {}) {
     if (material && a.artistFactor < 1 && (newRank > a.oldRank || !passed))
       reasons.push('同じアーティスト（コラボ含む）の曲が上位に既出のため、順位を下げました');
     if (material && a.lineageBoost > 1 && (newRank < a.oldRank || passed))
-      reasons.push('入力曲と同じジャンル系統に近いため、順位を引き上げました');
+      reasons.push('入力曲と同じジャンル系統に近いため、順位を引き上げました' + a.basis);
     if (material && a.lineageBoost < 1 && (newRank > a.oldRank || !passed))
-      reasons.push('入力曲のジャンル系統から遠いため、順位を下げました');
+      reasons.push('入力曲のジャンル系統から遠いため、順位を下げました' + a.basis);
     return { ...a.sc, passed, reasons, effectiveScore: a.effectiveScore, artistFactor: a.artistFactor, lineageBoost: a.lineageBoost };
   });
 }

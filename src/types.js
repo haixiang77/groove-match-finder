@@ -152,6 +152,7 @@ export const AudioFeaturesSchema = s.object({
  * @property {string} [album]
  * @property {number} [releaseYear]
  * @property {File} [localFile]
+ * @property {{name: string, weight: number}[]} [tags]  Last.fm tags (track, else artist) used for lineage judgement
  */
 
 /**

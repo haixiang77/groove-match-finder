@@ -33,6 +33,7 @@ export const ANALYSIS_VERSION = 5;
 export const HOP = 256;
 const NFFT = 1024;
 const GRID_ONSET_GAIN = 20;
+const PERC_RANGE = { lo: 300, hi: 5000 }; // Hz; stays below the hi-hat band
 const BLEED_RATIO = 0.85; // snare/kick level ratio on a kick step below which it is bleed only
 // chooseDownbeat may also rotate by sub-beat steps (the beat tracker can lock onto an off-beat phase).
 const OFFBEAT_ROTATION_PENALTY = 0.4;
@@ -72,15 +73,35 @@ export function analyzeAudio(samples, sr) {
   let prevLog = new Float64Array(nBins);
   let curLog = new Float64Array(nBins);
   const fluxHi = Math.min(nBins - 1, Math.floor(8000 / binHz));
+  // Broadband percussive-ness: how evenly the magnitude rise spreads over the snare/mid range
+  // (participation ratio of the positive linear differences). A snare (noise burst) lifts many bins
+  // alike; a sung/played note or bass line concentrates its rise in a few harmonic peaks.
+  const pLo = Math.max(1, Math.ceil(PERC_RANGE.lo / binHz));
+  const pHi = Math.min(nBins - 1, Math.floor(PERC_RANGE.hi / binHz));
+  /** @type {number[]} */
+  const breadthArr = [];
+  /** @type {number[]} */
+  const riseArr = [];
+  const prevMag = new Float64Array(nBins);
   let frames = 0;
   stftForEach(samples, NFFT, HOP, (mag, f) => {
     let flux = 0;
+    let riseSum = 0;
+    let riseSq = 0;
     for (let k = 0; k < nBins; k++) {
       meanMag[k] += mag[k];
       meanPow[k] += mag[k] * mag[k];
       curLog[k] = Math.log1p(100 * mag[k]);
       if (f > 0 && k >= 1 && k <= fluxHi) flux += Math.max(0, curLog[k] - prevLog[k]);
+      if (f > 0 && k >= pLo && k <= pHi) {
+        const d = Math.max(0, mag[k] - prevMag[k]);
+        riseSum += d;
+        riseSq += d * d;
+      }
     }
+    prevMag.set(mag);
+    breadthArr.push(riseSq > 0 ? (riseSum * riseSum) / ((pHi - pLo + 1) * riseSq) : 0);
+    riseArr.push(riseSum);
     fluxArr.push(flux);
     [prevLog, curLog] = [curLog, prevLog];
     frames++;
@@ -98,6 +119,10 @@ export function analyzeAudio(samples, sr) {
   // 512-sample RMS band onsets used for the grid.
   const fluxDelay = Math.round(NFFT / 4 / HOP);
   for (let i = fluxDelay; i < onset.length; i++) onset[i] = Math.max(0, fluxRaw[i - fluxDelay] - trend[i - fluxDelay]);
+  const percOnset = new Float32Array(breadthArr.length);
+  let riseMax = 1e-12;
+  for (const r of riseArr) if (r > riseMax) riseMax = r;
+  for (let i = fluxDelay; i < percOnset.length; i++) percOnset[i] = breadthArr[i - fluxDelay] * Math.sqrt(riseArr[i - fluxDelay] / riseMax);
 
   // ---- Band separation (SciPy Butterworth equivalent) ---------------------
   const kickSig = bandpass(samples, BAND_RANGES.kick.lo, BAND_RANGES.kick.hi, sr, 4);
@@ -151,8 +176,9 @@ export function analyzeAudio(samples, sr) {
     snare: bandLatency(gridOnset.snare, beats),
     hat: bandLatency(gridOnset.hat, beats),
     mid: bandLatency(gridOnset.mid, beats),
+    perc: bandLatency(percOnset, beats),
   };
-  const rawGrid = { kick: new Float64Array(16), snare: new Float64Array(16), hat: new Float64Array(16), mid: new Float64Array(16), linKick: new Float64Array(16), linSnare: new Float64Array(16) };
+  const rawGrid = { kick: new Float64Array(16), snare: new Float64Array(16), hat: new Float64Array(16), mid: new Float64Array(16), perc: new Float64Array(16), linKick: new Float64Array(16), linSnare: new Float64Array(16) };
   const counts = new Float64Array(16);
   for (let i = 0; i + 1 < beats.length; i++) {
     const b0 = beats[i];
@@ -166,6 +192,7 @@ export function analyzeAudio(samples, sr) {
       rawGrid.snare[step] += windowMax(gridOnset.snare, pos + latency.snare * len / 4, radius);
       rawGrid.hat[step] += windowMax(gridOnset.hat, pos + latency.hat * len / 4, radius);
       rawGrid.mid[step] += windowMax(gridOnset.mid, pos + latency.mid * len / 4, radius);
+      rawGrid.perc[step] += windowMax(percOnset, pos + latency.perc * len / 4, radius);
       rawGrid.linKick[step] += windowMax(linOnset.kick, pos + latency.kick * len / 4, radius);
       rawGrid.linSnare[step] += windowMax(linOnset.snare, pos + latency.snare * len / 4, radius);
       counts[step]++;
@@ -181,6 +208,8 @@ export function analyzeAudio(samples, sr) {
     return { v, n: v.map((x) => (mx > 0 ? x / mx : 0)) };
   };
   const midN = norm(rawGrid.mid).n;
+  // Broadband (percussive) evidence: tonal onsets in the snare band (vocals, bass, keys) don't have it.
+  const percN = norm(rawGrid.perc).n;
   const kickN = norm(rawGrid.kick).n;
   // Kick→snare-band bleed. Both bands are max-normalised, so a snare that really coincides
   // with a kick reads ≈ the kick's level (ratio ≈ 1), whereas bleed alone sits clearly lower.
@@ -191,7 +220,7 @@ export function analyzeAudio(samples, sr) {
     const { v: avg, n: nrm } = norm(rawGrid[band]);
     // Kick energy bleeds into the snare band. A real snare also excites the
     // 1.5–6 kHz band at the same moment, a kick does not — gate on it.
-    const gated = band === 'snare' ? nrm.map((x, i) => x * midN[i] * (bleedOnly.has(i) ? 0.3 : 1)) : nrm;
+    const gated = band === 'snare' ? nrm.map((x, i) => x * Math.sqrt(midN[i]) * percN[i] ** 3 * (bleedOnly.has(i) ? 0.3 : 1)) : nrm;
     const gmx = Math.max(...gated);
     unrotated[band] = gated.map((v) => (gmx > 0 ? v / gmx : 0));
     // Presence: how strongly the best grid steps stand out against the band's typical onset level.
