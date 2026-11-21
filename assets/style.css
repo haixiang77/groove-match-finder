@@ -1065,3 +1065,9 @@ img,
 audio {
   max-width: 100%;
 }
+
+/* ---------- URL intake ---------- */
+.url-form { margin-top: 16px; }
+.url-row { display: flex; gap: 8px; }
+.url-row input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--border, #ccc); border-radius: 8px; font: inherit; }
+.url-error { color: var(--err, #d52d2d); font-weight: 600; margin: 6px 0 0; }

@@ -9,6 +9,8 @@ import { findEnergyWindow } from './audio/analyzer.js';
 import { AnalysisPool } from './audio/worker-pool.js';
 import { GridPlayer } from './ui/grid-player.js';
 import { runPipeline } from './core/pipeline.js';
+import { fetchCorsAware } from './services/http.js';
+import { resolveTrackUrl, UrlSourceError } from './services/url-source.js';
 import { defaultSettings, loadSettings } from './settings.js';
 import { showError } from './ui/banner.js';
 import { errorMessage, formatTime, isAbortError, textSimilarity } from './util.js';
@@ -45,6 +47,8 @@ const state = {
   explanation: null,
   /** @type {string | null} */
   objectUrl: null,
+  /** manual artist/title fields were filled from a pasted link */
+  urlIdentity: false,
 };
 
 const pool = new AnalysisPool();
@@ -127,7 +131,7 @@ function guarded(label, fn) {
 /**
  * Initialise the UI. File intake is wired by main.js beforehand and talks to
  * the returned handle.
- * @returns {{ loadFile: (file: File) => Promise<void>, isBusy: () => boolean, ready: boolean }}
+ * @returns {{ loadFile: (file: File) => Promise<void>, loadUrl: (url: string) => Promise<void>, isBusy: () => boolean, ready: boolean }}
  */
 export function initApp() {
   const ok = guarded('画面要素の取得', () => {
@@ -146,7 +150,7 @@ export function initApp() {
     guarded('解析の実行', setupRun);
     guarded('結果の書き出し', setupExport);
   }
-  return { loadFile, isBusy: () => state.run !== null, ready: ok };
+  return { loadFile: (/** @type {File} */ f) => loadFile(f), loadUrl, isBusy: () => state.run !== null, ready: ok };
 }
 
 // ──────────────────────────────── settings & dialogs ────────────────────────────────
@@ -183,9 +187,50 @@ function updateKeyStatus() {
 }
 
 // ──────────────────────────────── file loading ────────────────────────────────
-/** @param {File} file */
-async function loadFile(file) {
+/**
+ * Resolve a pasted track link, fetch its iTunes preview and feed it through
+ * the same path as a local file. Rejects with a Japanese message on failure
+ * without touching the current track.
+ * @param {string} url
+ */
+async function loadUrl(url) {
   if (!els) throw new Error('アプリの初期化が完了していません');
+  if (state.run) throw new Error('解析の実行中は読み込めません。完了またはキャンセルしてください。');
+  try {
+    const t = await resolveTrackUrl(url, { country: state.settings.country, proxy: state.settings.corsProxy });
+    /** @type {Response} */
+    let res;
+    try {
+      res = await fetchCorsAware(t.previewUrl, state.settings.corsProxy, { timeoutMs: 30000 });
+    } catch (err) {
+      throw new UrlSourceError(`プレビュー音源を取得できませんでした。ネットワークを確認してください。（${errorMessage(err)}）`);
+    }
+    if (!res.ok) throw new UrlSourceError(`プレビュー音源を取得できませんでした（HTTP ${res.status}）。`);
+    const blob = await res.blob();
+    const file = new File([blob], `${t.artist} - ${t.title}.m4a`, { type: blob.type || 'audio/mp4' });
+    await loadFile(file, { artist: t.artist, title: t.title });
+  } catch (err) {
+    if (err instanceof UrlSourceError) throw err;
+    throw new UrlSourceError(`リンクから曲を読み込めませんでした: ${errorMessage(err)}`);
+  }
+}
+
+/**
+ * @param {File} file
+ * @param {{artist: string, title: string}} [identity] known artist/title (URL intake); passed on as the manual identification
+ */
+async function loadFile(file, identity) {
+  if (!els) throw new Error('アプリの初期化が完了していません');
+  if (identity) {
+    els.manualArtist.value = identity.artist;
+    els.manualTitle.value = identity.title;
+    state.urlIdentity = true;
+  } else if (state.urlIdentity) {
+    // don't leak the previous link's identity into a plain file
+    els.manualArtist.value = '';
+    els.manualTitle.value = '';
+    state.urlIdentity = false;
+  }
   stopPlayback();
   els.playGrid.disabled = true;
   state.file = file;

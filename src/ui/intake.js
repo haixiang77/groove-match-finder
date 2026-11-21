@@ -13,6 +13,46 @@ export function isAudioFile(f) {
 }
 
 /**
+ * URL paste form. Errors are shown inline only, so a bad link never touches
+ * the file-input path.
+ * @param {(url: string) => Promise<void>} onUrl rejects with a Japanese message on failure
+ * @param {() => boolean} [isBusy]
+ */
+export function attachUrlIntake(onUrl, isBusy = () => false) {
+  const form = document.getElementById('url-form');
+  const input = /** @type {HTMLInputElement | null} */ (document.getElementById('url-input'));
+  const submit = /** @type {HTMLButtonElement | null} */ (document.getElementById('url-submit'));
+  const errEl = document.getElementById('url-error');
+  if (!form || !input) return;
+  /** @param {string} msg */
+  const setError = (msg) => {
+    if (!errEl) return;
+    errEl.textContent = msg;
+    errEl.hidden = !msg;
+  };
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (isBusy() || (submit && submit.disabled)) return;
+    setError('');
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = '読み込み中…';
+    }
+    try {
+      await onUrl(input.value);
+      input.value = '';
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = '読み込む';
+      }
+    }
+  });
+}
+
+/**
  * @param {(file: File) => void} onFile called with each accepted file
  * @param {() => boolean} [isBusy] drops are ignored while busy
  */

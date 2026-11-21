@@ -121,6 +121,17 @@ export function searchSongs(term, opts) {
 }
 
 /**
+ * Look up one track by iTunes track id.
+ * @param {number} id
+ * @param {ItunesOptions} opts
+ * @returns {Promise<ItunesTrack | null>}
+ */
+export async function lookupTrack(id, opts) {
+  const results = await query({ id }, opts, 'lookup');
+  return results.find((r) => r.trackId === id) ?? results[0] ?? null;
+}
+
+/**
  * Find the iTunes track that best matches artist + title.
  * @param {string} artist
  * @param {string} title

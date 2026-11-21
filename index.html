@@ -39,6 +39,17 @@
           <span class="dz-title">解析したい曲をドロップ</span>
           <span class="dz-sub">または クリックして選択（MP3 / M4A / WAV / FLAC など）</span>
         </label>
+        <form class="url-form" id="url-form" novalidate>
+          <label class="field" for="url-input">
+            <span>または 曲のリンクを貼り付け（Apple Music / iTunes / YouTube）</span>
+          </label>
+          <div class="url-row">
+            <input type="url" id="url-input" autocomplete="off" placeholder="https://music.apple.com/jp/album/…?i=…" />
+            <button type="submit" class="btn" id="url-submit">読み込む</button>
+          </div>
+          <p class="small url-error" id="url-error" role="alert" hidden></p>
+          <p class="muted small">30秒のプレビュー音源を取得して解析します（フル尺ではありません）。</p>
+        </form>
         <ul class="hero-notes">
           <li>音声のデコードと解析はすべてブラウザ内で実行されます。</li>
           <li>外部に送信されるのは、設定したAPI（指紋照合・Gemini）向けの短い抜粋のみです。</li>
