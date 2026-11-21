@@ -56,7 +56,7 @@ export async function fetchWithTimeout(url, init = {}) {
     if (err instanceof DOMException && err.name === 'TimeoutError') throw new NetworkError(`タイムアウト: ${shortUrl(url)}`, url);
     if (ctrl.signal.aborted && ctrl.signal.reason instanceof DOMException && ctrl.signal.reason.name === 'TimeoutError')
       throw new NetworkError(`タイムアウト: ${shortUrl(url)}`, url);
-    throw new NetworkError(`通信できませんでした（CORS/ネットワーク）: ${shortUrl(url)}`, url);
+    throw new NetworkError(`通信できませんでした（ネットワークエラー）: ${shortUrl(url)}`, url);
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

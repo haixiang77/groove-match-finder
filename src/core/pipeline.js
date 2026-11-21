@@ -73,11 +73,19 @@ const featureCache = new Map();
 export async function runPipeline(ctx) {
   const { input, settings, hooks, signal, pool } = ctx;
   const log = hooks.onLog;
+  let lastWaitLog = 0;
   const itunesOpts = {
     country: settings.country,
     proxy: settings.corsProxy,
     signal,
-    onWait: (/** @type {number} */ ms) => ms > 1500 && log(`iTunes APIのレート制限のため ${Math.ceil(ms / 1000)} 秒待機…`),
+    // Max iTunes network searches per run (cache / duplicate hits are free).
+    budget: { left: 40 },
+    // Consecutive waits are logged once, not on every queued request.
+    onWait: (/** @type {number} */ ms) => {
+      if (ms <= 1500 || Date.now() - lastWaitLog < 30000) return;
+      lastWaitLog = Date.now();
+      log(`iTunes APIのレート制限のため待機中（約 ${Math.ceil(ms / 1000)} 秒ずつ）…`);
+    },
   };
 
   // ───────────────────────── Step 1: identify ‖ analyse ─────────────────────────

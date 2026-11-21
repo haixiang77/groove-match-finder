@@ -5,7 +5,7 @@
  * a shared token bucket and results are cached in memory.
  */
 import { s } from '../schema.js';
-import { RateLimiter, textSimilarity, trackKey } from '../util.js';
+import { RateLimiter, sleep, textSimilarity, trackKey } from '../util.js';
 import { fetchJson, jsonp, viaProxy } from './http.js';
 
 const ItunesTrackSchema = s.object({
@@ -40,6 +40,7 @@ const cache = new Map();
  * @property {string} proxy      optional CORS proxy
  * @property {AbortSignal} [signal]
  * @property {(ms: number) => void} [onWait]
+ * @property {{left: number}} [budget]  max network searches left in this run (cache hits are free)
  */
 
 /**
@@ -52,8 +53,38 @@ async function query(params, opts, endpoint = 'search') {
   const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]));
   qs.set('country', opts.country || 'JP');
   const url = `https://itunes.apple.com/${endpoint}?${qs}`;
-  const cached = cache.get(url);
+  const key = cacheKey(endpoint, params, qs.get('country') ?? '');
+  const cached = cache.get(key);
   if (cached) return cached;
+  const pending = inflight.get(key);
+  if (pending) return pending;
+  if (opts.budget) {
+    if (opts.budget.left <= 0) throw new Error('iTunes 検索数の上限に達したためスキップ');
+    opts.budget.left--;
+  }
+  const p = fetchResults(url, key, opts).finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+/** Normalised key so case / spacing variants of one search share a result. */
+function cacheKey(/** @type {string} */ endpoint, /** @type {Record<string, string | number>} */ params, /** @type {string} */ country) {
+  const norm = Object.entries(params)
+    .map(([k, v]) => [k, String(v).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()])
+    .sort(([a], [b]) => (a < b ? -1 : 1));
+  return `${endpoint}|${country}|${JSON.stringify(norm)}`;
+}
+
+/** @type {Map<string, Promise<ItunesTrack[]>>} */
+const inflight = new Map();
+
+/**
+ * @param {string} url
+ * @param {string} key
+ * @param {ItunesOptions} opts
+ * @returns {Promise<ItunesTrack[]>}
+ */
+async function fetchResults(url, key, opts) {
   const data = await itunesLimiter.schedule(
     async () => {
       // JSONP first: it is immune to CORS. Fall back to fetch (direct, then proxy).
@@ -61,6 +92,8 @@ async function query(params, opts, endpoint = 'search') {
         return await jsonp(url, { signal: opts.signal });
       } catch (err) {
         if (opts.signal?.aborted) throw err;
+        // JSONP failures are often rate limiting: back off briefly before retrying via fetch.
+        await sleep(1500, opts.signal);
         try {
           return await fetchJson(url, { signal: opts.signal, retries: 1 });
         } catch (err2) {
@@ -72,7 +105,7 @@ async function query(params, opts, endpoint = 'search') {
     { onWait: opts.onWait, signal: opts.signal },
   );
   const parsed = SearchResponseSchema.parse(data).results.filter((r) => !r.kind || r.kind === 'song');
-  cache.set(url, parsed);
+  cache.set(key, parsed);
   return parsed;
 }
 

@@ -17,7 +17,7 @@ export const SettingsSchema = s.object({
   acrSecret: s.string().catch(''),
   lastfmKey: s.string().catch(''),
   geminiKey: s.string().catch(''),
-  geminiModel: s.string({ min: 1 }).catch('gemini-2.5-flash'),
+  geminiModel: s.string({ min: 1 }).catch('gemini-3.5-flash'),
   corsProxy: s.string().catch(''),
   country: s.string({ min: 2, max: 2 }).catch('JP'),
   poolSize: s.number({ min: 8, max: 40, int: true }).catch(24),
