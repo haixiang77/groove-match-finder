@@ -69,3 +69,50 @@ export function cleanGrid(g) {
     });
   return { kick: clean(g.kick), snare: clean(g.snare), hat: clean(g.hat) };
 }
+
+/** Metrical weight of each 16th step in 4/4 (0 = downbeat, lower = weaker), after Longuet-Higgins & Lee. */
+export const METRIC_WEIGHTS = [0, -4, -3, -4, -2, -4, -3, -4, -1, -4, -3, -4, -2, -4, -3, -4];
+/** A grid value at or above this counts as an onset. */
+export const ONSET_THRESHOLD = 0.5;
+/** Raw syncopation (mean over lanes) that maps to 1.0. */
+const SYNC_FULL_SCALE = 12;
+
+/**
+ * Syncopation of one 16-step lane (Longuet-Higgins & Lee / Witek et al.): an onset followed by a
+ * rest that sits on a metrically stronger step contributes the weight difference. Cyclic over the bar.
+ * @param {number[]} lane
+ * @returns {number} raw sum (0 = none)
+ */
+export function laneSyncopation(lane) {
+  let total = 0;
+  for (let i = 0; i < 16; i++) {
+    if (lane[i] < ONSET_THRESHOLD) continue;
+    let strongest = -Infinity;
+    for (let d = 1; d < 16; d++) {
+      const j = (i + d) % 16;
+      if (lane[j] >= ONSET_THRESHOLD) break;
+      strongest = Math.max(strongest, METRIC_WEIGHTS[j]);
+    }
+    if (strongest > METRIC_WEIGHTS[i]) total += strongest - METRIC_WEIGHTS[i];
+  }
+  return total;
+}
+
+/**
+ * Syncopation index in 0..1, averaged over every lane (kick, snare, hat).
+ * @param {import('../types.js').RhythmGrid} g
+ */
+export function syncopationIndex(g) {
+  const lanes = [g.kick, g.snare, g.hat];
+  const raw = lanes.reduce((s, l) => s + laneSyncopation(l), 0) / lanes.length;
+  return Math.max(0, Math.min(1, raw / SYNC_FULL_SCALE));
+}
+
+/**
+ * Event density: grid onsets (all lanes) per beat.
+ * @param {import('../types.js').RhythmGrid} g
+ */
+export function eventDensity(g) {
+  const n = [g.kick, g.snare, g.hat].reduce((s, l) => s + l.filter((v) => v >= ONSET_THRESHOLD).length, 0);
+  return n / 4;
+}

@@ -26,13 +26,14 @@ import {
   windowMax,
 } from './dsp.js';
 import { estimateTempo, regulariseBeats, smoothBeats, snapToUniformGrid, trackBeats } from './tempo.js';
-import { canonicalizeBar, cleanGrid, rotateGrid } from './grid.js';
+import { canonicalizeBar, cleanGrid, eventDensity, rotateGrid, syncopationIndex } from './grid.js';
 export { rotateGrid };
 
-export const ANALYSIS_VERSION = 5;
+export const ANALYSIS_VERSION = 6;
 export const HOP = 256;
 const NFFT = 1024;
 const GRID_ONSET_GAIN = 20;
+const LOW_FLUX_HZ = 200; // low-band flux / RMS statistics cover bins up to here
 const PERC_RANGE = { lo: 300, hi: 5000 }; // Hz; stays below the hi-hat band
 const BLEED_RATIO = 0.85; // snare/kick level ratio on a kick step below which it is bleed only
 // chooseDownbeat may also rotate by sub-beat steps (the beat tracker can lock onto an off-beat phase).
@@ -42,6 +43,54 @@ export class AnalysisError extends Error {}
 
 /** @param {number} v */
 const c01 = (v) => Math.max(0, Math.min(1, v));
+
+/** @param {number} v @param {number} d */
+const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
+
+/** @param {ArrayLike<number>} a */
+function variance(a) {
+  if (!a.length) return 0;
+  const m = mean(Array.from(a));
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += (a[i] - m) ** 2;
+  return s / a.length;
+}
+
+/** Variance relative to the squared mean (level-independent). @param {ArrayLike<number>} a */
+function relVariance(a) {
+  const m = a.length ? mean(Array.from(a)) : 0;
+  return m > 1e-12 ? variance(a) / (m * m) : 0;
+}
+
+/** @param {number[]} beats frames */
+function meanBeatPeriod(beats) {
+  return beats.length > 1 ? (beats[beats.length - 1] - beats[0]) / (beats.length - 1) : 0;
+}
+
+/**
+ * Pulse clarity: how strongly the onset envelope repeats at the beat period (proxy for the
+ * strength of the beat-rate spectral component). Mean normalised autocorrelation at 1, 2 and 4
+ * beats, 0..1. A steady pulse gives a high value; unpulsed / irregular onsets a low one.
+ * @param {Float32Array} env onset envelope
+ * @param {number} period beat period in frames
+ */
+export function pulseClarity(env, period) {
+  const n = env.length;
+  if (period < 2 || n < period * 5) return 0;
+  const m = mean(Array.from(env));
+  let denom = 0;
+  for (let i = 0; i < n; i++) denom += (env[i] - m) ** 2;
+  if (denom <= 1e-12) return 0;
+  let acc = 0;
+  for (const k of [1, 2, 4]) {
+    const lag = period * k;
+    const end = Math.floor(n - 1 - lag);
+    let s = 0;
+    for (let t = 0; t < end; t++) s += (env[t] - m) * (interp(env, t + lag) - m);
+    acc += Math.max(0, (s / denom) * (n / Math.max(1, end)));
+  }
+  return c01(acc / 3);
+}
 
 /**
  * @param {Float32Array} samples mono PCM
@@ -83,16 +132,27 @@ export function analyzeAudio(samples, sr) {
   /** @type {number[]} */
   const riseArr = [];
   const prevMag = new Float64Array(nBins);
+  const lowHi = Math.min(nBins - 1, Math.floor(LOW_FLUX_HZ / binHz));
+  /** @type {number[]} */
+  const lowFluxArr = [];
+  /** @type {number[]} */
+  const lowRmsArr = [];
   let frames = 0;
   stftForEach(samples, NFFT, HOP, (mag, f) => {
     let flux = 0;
     let riseSum = 0;
     let riseSq = 0;
+    let lowFlux = 0;
+    let lowPow = 0;
     for (let k = 0; k < nBins; k++) {
       meanMag[k] += mag[k];
       meanPow[k] += mag[k] * mag[k];
       curLog[k] = Math.log1p(100 * mag[k]);
       if (f > 0 && k >= 1 && k <= fluxHi) flux += Math.max(0, curLog[k] - prevLog[k]);
+      if (k <= lowHi) {
+        lowPow += mag[k] * mag[k];
+        if (f > 0 && k >= 1) lowFlux += Math.max(0, curLog[k] - prevLog[k]);
+      }
       if (f > 0 && k >= pLo && k <= pHi) {
         const d = Math.max(0, mag[k] - prevMag[k]);
         riseSum += d;
@@ -103,6 +163,8 @@ export function analyzeAudio(samples, sr) {
     breadthArr.push(riseSq > 0 ? (riseSum * riseSum) / ((pHi - pLo + 1) * riseSq) : 0);
     riseArr.push(riseSum);
     fluxArr.push(flux);
+    if (f > 0) lowFluxArr.push(lowFlux);
+    lowRmsArr.push(Math.sqrt(lowPow));
     [prevLog, curLog] = [curLog, prevLog];
     frames++;
   });
@@ -282,6 +344,12 @@ export function analyzeAudio(samples, sr) {
       subSustain,
       hatDensity,
       kickDensity,
+      syncopation: round(syncopationIndex(grid), 2),
+      eventDensity: round(eventDensity(grid), 2),
+      pulseClarity: round(pulseClarity(meterOnset, meanBeatPeriod(beats)), 2),
+      lowFluxMean: round(mean(lowFluxArr), 3),
+      lowFluxVar: round(variance(lowFluxArr), 3),
+      lowRmsVar: round(relVariance(lowRmsArr), 3),
     },
     spectral: {
       centroidHz,

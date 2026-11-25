@@ -58,6 +58,12 @@ export const AudioFeaturesSchema = s.object({
     subSustain: s.number(),
     hatDensity: s.number(),
     kickDensity: s.number(),
+    syncopation: s.number({ min: 0, max: 1 }),
+    eventDensity: s.number({ min: 0 }),
+    pulseClarity: s.number({ min: 0, max: 1 }),
+    lowFluxMean: s.number({ min: 0 }),
+    lowFluxVar: s.number({ min: 0 }),
+    lowRmsVar: s.number({ min: 0 }),
   }),
   spectral: s.object({
     centroidHz: s.number(),
@@ -91,6 +97,12 @@ export const AudioFeaturesSchema = s.object({
  * @property {number} subSustain       0..1, long sustained subs (808) → high
  * @property {number} hatDensity       Fraction of 16 steps with strong hat hits
  * @property {number} kickDensity      Fraction of 16 steps with strong kick hits
+ * @property {number} syncopation      0..1, Longuet-Higgins/Lee syncopation over all grid lanes
+ * @property {number} eventDensity     Grid onsets (all lanes) per beat
+ * @property {number} pulseClarity     0..1, beat-period autocorrelation of the onset envelope (pulse strength proxy)
+ * @property {number} lowFluxMean      Mean spectral flux below 200 Hz (log-magnitude)
+ * @property {number} lowFluxVar       Variance of that flux
+ * @property {number} lowRmsVar        Squared coefficient of variation of the sub-200 Hz RMS
  */
 
 /**

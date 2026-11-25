@@ -11,7 +11,7 @@ import { keyCompatibility } from '../audio/key.js';
 /** @typedef {import('../types.js').ScoreBreakdown} ScoreBreakdown */
 
 /** @type {ScoreBreakdown} */
-export const DEFAULT_WEIGHTS = { rhythm: 0.4, tempo: 0.2, groove: 0.15, timbre: 0.2, key: 0.05 };
+export const DEFAULT_WEIGHTS = { rhythm: 0.4, tempo: 0.12, groove: 0.23, timbre: 0.2, key: 0.05 };
 
 export const BAND_WEIGHTS = { kick: 0.45, snare: 0.35, hat: 0.2 };
 
@@ -106,8 +106,45 @@ export function gridSimilarity(a, b, ratio) {
   return { sim: Math.max(0, best.sim), shift: best.shift, bands: best.bands };
 }
 
-/** @param {AudioFeatures} a @param {AudioFeatures} b */
-export function grooveSimilarity(a, b) {
+/** Share of the groove score given to the research-based features (syncopation, density, pulse, low-band motion). */
+export const PSYCH_SHARE = 0.4;
+
+/**
+ * Event density of the candidate expressed per beat of the input (half / double-time aware).
+ * ratio r satisfies b·r ≈ a, so one candidate beat spans r input beats.
+ * @param {number} densityB @param {number} ratio
+ */
+const densityInInputFrame = (densityB, ratio) => densityB / ratio;
+
+/**
+ * Closeness of the research-based groove features (0..1); null when either side lacks them.
+ * @param {AudioFeatures} a @param {AudioFeatures} b @param {number} ratio tempo ratio (1, 2, 0.5)
+ */
+export function psychGrooveSimilarity(a, b, ratio = 1) {
+  const ga = a.groove;
+  const gb = b.groove;
+  if (typeof ga.syncopation !== 'number' || typeof gb.syncopation !== 'number') return null;
+  const sync = gauss(ga.syncopation - gb.syncopation, 0.2);
+  const dens = gauss(Math.log2((ga.eventDensity + 0.25) / (densityInInputFrame(gb.eventDensity, ratio) + 0.25)), 0.4);
+  const pulse = gauss(ga.pulseClarity - gb.pulseClarity, 0.3);
+  const lf = lowMotionSimilarity(a, b);
+  return 0.3 * sync + 0.25 * dens + 0.15 * pulse + 0.3 * lf;
+}
+
+/**
+ * Closeness of the low-band motion (spectral flux mean / variance, RMS variance).
+ * @param {AudioFeatures} a @param {AudioFeatures} b
+ */
+export function lowMotionSimilarity(a, b) {
+  const ga = a.groove;
+  const gb = b.groove;
+  /** @param {number} x @param {number} y */
+  const lr = (x, y) => Math.log2((x + 1e-3) / (y + 1e-3));
+  return 0.4 * gauss(lr(ga.lowFluxMean, gb.lowFluxMean), 0.5) + 0.3 * gauss(lr(ga.lowFluxVar, gb.lowFluxVar), 1.0) + 0.3 * gauss(lr(ga.lowRmsVar, gb.lowRmsVar), 1.0);
+}
+
+/** @param {AudioFeatures} a @param {AudioFeatures} b @param {number} [ratio] tempo ratio of the match */
+export function grooveSimilarity(a, b, ratio = 1) {
   const ga = a.groove;
   const gb = b.groove;
   const swingConf = Math.min(ga.swingConfidence, gb.swingConfidence);
@@ -117,7 +154,9 @@ export function grooveSimilarity(a, b) {
   const hats = gauss(ga.hatDensity - gb.hatDensity, 0.25);
   const keys = /** @type {import('../types.js').TraitId[]} */ (Object.keys(a.traits));
   const traits = 1 - mean(keys.map((k) => Math.abs(a.traits[k] - b.traits[k])));
-  return 0.22 * swing + 0.18 * side + 0.2 * sub + 0.1 * hats + 0.3 * traits;
+  const base = 0.22 * swing + 0.18 * side + 0.2 * sub + 0.1 * hats + 0.3 * traits;
+  const psych = psychGrooveSimilarity(a, b, ratio);
+  return psych === null ? base : (1 - PSYCH_SHARE) * base + PSYCH_SHARE * psych;
 }
 
 /** @param {AudioFeatures} a @param {AudioFeatures} b */
@@ -150,7 +189,7 @@ export function compareFeatures(input, cand, weights = DEFAULT_WEIGHTS) {
   const breakdown = {
     rhythm: grid.sim,
     tempo: tempo.sim,
-    groove: grooveSimilarity(input, cand),
+    groove: grooveSimilarity(input, cand, tempo.ratio),
     timbre: timbreSimilarity(input, cand),
     key: keySimilarity(input, cand),
   };
@@ -165,6 +204,26 @@ export function compareFeatures(input, cand, weights = DEFAULT_WEIGHTS) {
     tempoRatio: tempo.ratio,
     reasons: explainMatch(input, cand, { breakdown, bands: grid.bands, ratio: tempo.ratio }),
   };
+}
+
+/**
+ * Reasons from the research-based groove features (syncopation, event density, low-end motion).
+ * @param {AudioFeatures} a @param {AudioFeatures} b @param {number} ratio
+ * @returns {string[]}
+ */
+export function grooveReasons(a, b, ratio) {
+  const ga = a.groove;
+  const gb = b.groove;
+  if (typeof ga.syncopation !== 'number' || typeof gb.syncopation !== 'number') return [];
+  /** @type {string[]} */
+  const out = [];
+  if (Math.abs(ga.syncopation - gb.syncopation) <= 0.12)
+    out.push(`シンコペーション量が近い（${pct(ga.syncopation)} / ${pct(gb.syncopation)}）`);
+  const db2 = densityInInputFrame(gb.eventDensity, ratio);
+  if (Math.abs(Math.log2((ga.eventDensity + 0.25) / (db2 + 0.25))) <= 0.25)
+    out.push(`イベント密度が近い（${ga.eventDensity.toFixed(1)} / ${db2.toFixed(1)} 打/拍）`);
+  if (lowMotionSimilarity(a, b) >= 0.8) out.push('低音の動き（低域フラックス・音量変動）が近い');
+  return out;
 }
 
 /** @param {number} v */
@@ -199,6 +258,7 @@ export function explainMatch(a, b, r) {
     out.push(`スウィング量がほぼ同じ（${a.groove.swing}% / ${b.groove.swing}%）`);
   if (a.groove.sidechainDb >= 2 && b.groove.sidechainDb >= 2) out.push(`両方にサイドチェインのポンピング（${a.groove.sidechainDb}dB / ${b.groove.sidechainDb}dB）`);
   if (a.groove.subSustain >= 0.45 && b.groove.subSustain >= 0.45) out.push('ロングサステインのサブベース（808系）が共通');
+  out.push(...grooveReasons(a, b, r.ratio));
   if (r.breakdown.timbre >= 0.75) out.push(`帯域バランス・明るさが近い（スペクトル重心 ${Math.round(a.spectral.centroidHz)}Hz / ${Math.round(b.spectral.centroidHz)}Hz）`);
   else if (r.breakdown.timbre < 0.45) out.push('帯域バランス（音色の明るさ・低域量）は異なる');
   if (keyCompatibility(a.key, b.key) >= 0.85 && Math.min(a.key.confidence, b.key.confidence) > 0.3)
