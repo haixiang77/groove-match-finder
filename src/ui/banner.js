@@ -6,6 +6,28 @@
 
 const ID = 'app-error-banner';
 
+/** @type {((message: string, detail?: unknown) => void) | null} */
+let sink = null;
+/** @type {{ label: string, run: () => void } | null} */
+let action = null;
+
+/**
+ * Register a logger that receives every shown error (e.g. the diagnostic log).
+ * @param {(message: string, detail?: unknown) => void} fn
+ */
+export function setErrorSink(fn) {
+  sink = fn;
+}
+
+/**
+ * Register an extra button on the banner (e.g. "open diagnostic log").
+ * @param {string} label
+ * @param {() => void} run
+ */
+export function setBannerAction(label, run) {
+  action = { label, run };
+}
+
 /**
  * Show a dismissible, plain-language error banner at the top of the page.
  * @param {string} message headline (Japanese, plain language)
@@ -13,6 +35,11 @@ const ID = 'app-error-banner';
  */
 export function showError(message, detail) {
   if (detail !== undefined) console.error(message, detail);
+  try {
+    sink?.(message, detail);
+  } catch {
+    /* logging must never break the banner */
+  }
   try {
     const doc = globalThis.document;
     if (!doc?.body) return;
@@ -31,7 +58,23 @@ export function showError(message, detail) {
       close.textContent = '閉じる';
       close.style.cssText = 'flex:none;cursor:pointer;color:#fff;background:transparent;border:1px solid #fff;border-radius:4px;padding:2px 10px';
       close.addEventListener('click', () => box?.remove());
-      box.append(body, close);
+      box.append(body);
+      if (action) {
+        const act = action;
+        const open = doc.createElement('button');
+        open.type = 'button';
+        open.textContent = act.label;
+        open.style.cssText = close.style.cssText;
+        open.addEventListener('click', () => {
+          try {
+            act.run();
+          } catch {
+            /* ignore */
+          }
+        });
+        box.append(open);
+      }
+      box.append(close);
       doc.body.append(box);
     }
     const body = box.querySelector('.banner-body');

@@ -5,7 +5,7 @@
  * are pure so they can be unit-tested without a network.
  */
 import { s } from '../schema.js';
-import { textSimilarity } from '../util.js';
+import { normalizeText, textSimilarity } from '../util.js';
 import { fetchJson, HttpError, NetworkError } from './http.js';
 import { searchSongs, lookupTrack } from './itunes.js';
 
@@ -96,18 +96,61 @@ export function cleanYoutubeTitle(videoTitle, channel = '') {
  * @returns {{best: import('./itunes.js').ItunesTrack | null, ranked: {track: import('./itunes.js').ItunesTrack, score: number}[]}}
  */
 export function pickBestMatch(guess, hits) {
-  const ranked = hits
+  const ranked = rankHits(guess, hits);
+  // A single near-exact title match wins even when the artist spelling differs
+  // (e.g. Japanese name vs romaji), since those can't be compared as strings.
+  const strong = ranked.filter((r) => isStrongTitleMatch(r.track.trackName, guess.title));
+  if (strong.length === 1) return { best: strong[0].track, ranked };
+  const [top, second] = ranked;
+  if (!top || top.score < 0.7) return { best: null, ranked };
+  // Ambiguous when a different song scores almost the same.
+  if (second && second.score >= top.score - 0.05 && textSimilarity(second.track.trackName, top.track.trackName) < 0.9) return { best: null, ranked };
+  return { best: top.track, ranked };
+}
+
+/**
+ * Near-exact title match: equal after normalisation, or one fully contains the other
+ * (the contained side must be at least 3 chars so tiny titles don't match everything).
+ * @param {string} candidate
+ * @param {string} guessTitle
+ */
+export function isStrongTitleMatch(candidate, guessTitle) {
+  const x = normalizeText(candidate);
+  const y = normalizeText(guessTitle);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.length >= 3 && long.includes(short);
+}
+
+/**
+ * Identify the iTunes track for a YouTube guess: search "artist title" first, and
+ * when nothing acceptable comes back, search the title alone and judge the union.
+ * @param {{artist: string, title: string}} guess
+ * @param {(term: string) => Promise<import('./itunes.js').ItunesTrack[]>} search
+ */
+export async function identifyYoutubeTrack(guess, search) {
+  const first = await search(`${guess.artist} ${guess.title}`.trim());
+  let result = pickBestMatch(guess, first);
+  if (result.best || !guess.artist || !guess.title) return result;
+  const second = await search(guess.title);
+  const seen = new Set(first.map((t) => t.trackId));
+  result = pickBestMatch(guess, [...first, ...second.filter((t) => !seen.has(t.trackId))]);
+  return result;
+}
+
+/**
+ * @param {{artist: string, title: string}} guess
+ * @param {import('./itunes.js').ItunesTrack[]} hits
+ */
+function rankHits(guess, hits) {
+  return hits
     .map((track) => {
       const titleSim = textSimilarity(track.trackName, guess.title);
       const artistSim = guess.artist ? textSimilarity(track.artistName, guess.artist) : 0.5;
       return { track, score: 0.6 * titleSim + 0.4 * artistSim };
     })
     .sort((a, b) => b.score - a.score);
-  const [top, second] = ranked;
-  if (!top || top.score < 0.7) return { best: null, ranked };
-  // Ambiguous when a different song scores almost the same.
-  if (second && second.score >= top.score - 0.05 && textSimilarity(second.track.trackName, top.track.trackName) < 0.9) return { best: null, ranked };
-  return { best: top.track, ranked };
 }
 
 const OEmbedSchema = s.object({ title: s.string(), author_name: s.string().optional() });
@@ -138,8 +181,7 @@ export async function resolveTrackUrl(raw, opts) {
     } else {
       const oembed = OEmbedSchema.parse(await fetchJson(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(parsed.url)}`, { signal: opts.signal, retries: 1, netRetries: 1 }));
       const guess = cleanYoutubeTitle(oembed.title, oembed.author_name);
-      const hits = await searchSongs(`${guess.artist} ${guess.title}`.trim(), { ...itunesOpts, limit: 8 });
-      const { best, ranked } = pickBestMatch(guess, hits);
+      const { best, ranked } = await identifyYoutubeTrack(guess, (term) => searchSongs(term, { ...itunesOpts, limit: 8 }));
       if (!best) {
         const names = ranked.slice(0, 3).map((r) => `「${r.track.artistName} — ${r.track.trackName}」`);
         throw new UrlSourceError(

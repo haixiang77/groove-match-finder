@@ -1,6 +1,6 @@
 {
   "name": "refscope",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "RefScope — browser-based reference track finder (groove / rhythm grid / sonic texture matching). Runs on GitHub Pages.",
   "type": "module",
